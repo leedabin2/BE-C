@@ -16,8 +16,8 @@ import java.util.stream.Collectors;
 /**
  * 전역 예외 처리기.
  *
- * <p>컨트롤러에서 발생한 예외를 잡아 {@link ApiResponse} 형태로 변환한다.
- * 예외가 여기서 처리되므로 서비스가 중단되지 않는다.</p>
+ * 컨트롤러에서 발생한 예외를 잡아 {@link ApiResponse} 형태로 변환한다.
+ * 예외가 여기서 처리되므로 서비스가 중단되지 않는다.
  */
 @Slf4j
 @RestControllerAdvice

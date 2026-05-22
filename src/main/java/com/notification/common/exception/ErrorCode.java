@@ -7,8 +7,8 @@ import org.springframework.http.HttpStatus;
 /**
  * 서비스 전체에서 사용하는 에러 코드 정의.
  *
- * <p>HTTP 상태 코드, 내부 에러 코드, 메시지를 한 곳에서 관리한다.
- * 접두사 규칙: C(Common 공통), N(Notification 알림)</p>
+ * HTTP 상태 코드, 내부 에러 코드, 메시지를 한 곳에서 관리한다.
+ * 접두사 규칙: C(Common 공통), N(Notification 알림)
  */
 @Getter
 @RequiredArgsConstructor

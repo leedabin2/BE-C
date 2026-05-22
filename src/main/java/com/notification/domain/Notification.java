@@ -11,16 +11,15 @@ import java.time.LocalDateTime;
 /**
  * 알림 도메인 엔티티.
  *
- * <p>알림의 전체 생명주기를 상태 머신으로 관리한다.</p>
- * <pre>
- * PENDING → PROCESSING → SENT
- *                      ↘ RETRYING → (재시도) → SENT
- *                                 ↘ FAILED (MAX_RETRY_COUNT 초과)
- * </pre>
+ * 알림의 전체 생명주기를 상태 머신으로 관리한다.
  *
- * <p>인덱스 전략:
- * idx_retry_fetch - 스케줄러가 재처리 대상을 조회할 때 사용 (status, next_retry_at, scheduled_at).
- * idx_user_notification - 사용자별 알림 목록 페이징 조회에 사용 (receiver_id, is_read, created_at).</p>
+ * 상태 전이: PENDING → PROCESSING → SENT
+ *                               → RETRYING → SENT (재시도 성공)
+ *                                          → FAILED (MAX_RETRY_COUNT 초과)
+ *
+ * 인덱스 전략:
+ * idx_retry_fetch - 스케줄러 재처리 대상 조회 (status, next_retry_at, scheduled_at)
+ * idx_user_notification - 사용자별 알림 목록 페이징 조회 (receiver_id, is_read, created_at)
  */
 @Entity
 @Table(name = "notification",
