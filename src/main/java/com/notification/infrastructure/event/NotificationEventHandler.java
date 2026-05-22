@@ -14,13 +14,11 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * 알림 생성 이벤트를 수신해 실제 발송을 트리거하는 핸들러.
  *
  * <p>Transactional Outbox Pattern의 발송 트리거 역할을 한다.</p>
- * <ul>
- *   <li>{@code @TransactionalEventListener(AFTER_COMMIT)}: DB 커밋이 완료된 후에만 실행된다.
- *       커밋 전에 서버가 재시작되면 이 핸들러는 실행되지 않으며,
- *       PENDING 상태로 남은 알림은 스케줄러가 재처리한다.</li>
- *   <li>{@code @Async}: 별도의 스레드풀(notificationExecutor)에서 실행되어
- *       발송 지연이 HTTP 응답 시간에 영향을 주지 않는다.</li>
- * </ul>
+ * <p>{@code @TransactionalEventListener(AFTER_COMMIT)}: DB 커밋이 완료된 후에만 실행된다.
+ * 커밋 전에 서버가 재시작되면 이 핸들러는 실행되지 않으며,
+ * PENDING 상태로 남은 알림은 스케줄러가 재처리한다.</p>
+ * <p>{@code @Async}: 별도의 스레드풀(notificationExecutor)에서 실행되어
+ * 발송 지연이 HTTP 응답 시간에 영향을 주지 않는다.</p>
  */
 @Slf4j
 @Component

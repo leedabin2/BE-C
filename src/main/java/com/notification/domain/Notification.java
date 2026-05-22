@@ -18,11 +18,9 @@ import java.time.LocalDateTime;
  *                                 ↘ FAILED (MAX_RETRY_COUNT 초과)
  * </pre>
  *
- * <p>인덱스 전략:</p>
- * <ul>
- *   <li>idx_retry_fetch: 스케줄러가 재처리 대상을 조회할 때 사용 (status, next_retry_at, scheduled_at)</li>
- *   <li>idx_user_notification: 사용자별 알림 목록 페이징 조회에 사용 (receiver_id, is_read, created_at)</li>
- * </ul>
+ * <p>인덱스 전략:
+ * idx_retry_fetch - 스케줄러가 재처리 대상을 조회할 때 사용 (status, next_retry_at, scheduled_at).
+ * idx_user_notification - 사용자별 알림 목록 페이징 조회에 사용 (receiver_id, is_read, created_at).</p>
  */
 @Entity
 @Table(name = "notification",
