@@ -34,9 +34,9 @@ public class NotificationService implements RegisterNotificationUseCase {
     /**
      * 알림 발송을 요청한다.
      *
-     * <p>멱등성 키를 생성해 중복 요청 여부를 확인한다.</p>
-     * <p>PENDING 상태로 알림을 저장한다 (트랜잭션 안).</p>
-     * <p>트랜잭션 커밋 후 {@link NotificationCreatedEvent}를 발행해 비동기 발송을 트리거한다.</p>
+     * 멱등성 키를 생성해 중복 요청 여부를 확인한다.
+     * PENDING 상태로 알림을 저장하고(트랜잭션 안),
+     * 커밋 후 {@link NotificationCreatedEvent}를 발행해 비동기 발송을 트리거한다.
      *
      * @param command 발송 요청 커맨드
      * @return 저장된 알림의 결과 정보

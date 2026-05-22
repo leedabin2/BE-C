@@ -15,8 +15,7 @@ import java.util.List;
 /**
  * JPA 기반 알림 저장소.
  *
- * <p>도메인의 {@link com.notification.domain.NotificationRepository}를 구현하는
- * 기술 구현체이며, Spring Data JPA가 런타임에 프록시를 생성한다.</p>
+ * JPA 기반 알림 저장소. Spring Data JPA가 런타임에 프록시를 생성한다.
  */
 public interface NotificationJpaRepository extends JpaRepository<Notification, Long> {
 
@@ -38,9 +37,9 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
     /**
      * 발송 대기 중인 알림을 비관적 락으로 조회한다.
      *
-     * <p>PESSIMISTIC_WRITE + SKIP LOCKED 동작으로, 다중 인스턴스 환경에서
+     * PESSIMISTIC_WRITE + SKIP LOCKED 동작으로, 다중 인스턴스 환경에서
      * 여러 스케줄러가 동시에 실행되더라도 같은 알림을 중복 처리하지 않는다.
-     * 이미 다른 인스턴스가 잠금을 획득한 행은 건너뛴다.</p>
+     * 이미 다른 인스턴스가 잠금을 획득한 행은 건너뛴다.
      *
      * @param limit 한 번에 처리할 최대 건수
      * @param now   현재 시각 (scheduledAt, nextRetryAt 비교 기준)
@@ -55,8 +54,8 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
     /**
      * PROCESSING 상태에서 일정 시간 이상 멈춰 있는 알림을 조회한다.
      *
-     * <p>서버 재시작이나 비정상 종료로 PROCESSING 상태에 stuck된 알림을
-     * 감지해 PENDING으로 복구하는 데 사용된다.</p>
+     * 서버 재시작이나 비정상 종료로 PROCESSING 상태에 stuck된 알림을
+     * 감지해 PENDING으로 복구하는 데 사용된다.
      *
      * @param threshold 이 시각 이전에 업데이트된 PROCESSING 알림을 대상으로 한다
      */

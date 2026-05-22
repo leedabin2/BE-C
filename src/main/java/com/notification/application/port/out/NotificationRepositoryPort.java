@@ -10,9 +10,9 @@ import java.util.Optional;
 /**
  * 알림 저장소 출력 포트.
  *
- * <p>application 레이어가 영속성 기술(JPA 등)에 직접 의존하지 않도록
+ * application 레이어가 영속성 기술(JPA 등)에 직접 의존하지 않도록
  * 필요한 저장소 연산을 인터페이스로 정의한다.
- * 구현체는 infrastructure/repository에 위치한다 (의존성 역전 원칙).</p>
+ * 구현체는 infrastructure/repository에 위치한다 (의존성 역전 원칙).
  */
 public interface NotificationRepositoryPort {
 
