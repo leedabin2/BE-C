@@ -1,7 +1,7 @@
 package com.notification.infrastructure.repository;
 
 import com.notification.domain.Notification;
-import com.notification.domain.NotificationRepository;
+import com.notification.application.port.out.NotificationRepositoryPort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,7 +13,7 @@ import java.util.Optional;
 
 @Repository
 @RequiredArgsConstructor
-public class NotificationRepositoryImpl implements NotificationRepository {
+public class NotificationRepositoryImpl implements NotificationRepositoryPort {
 
     private final NotificationJpaRepository jpaRepository;
 
