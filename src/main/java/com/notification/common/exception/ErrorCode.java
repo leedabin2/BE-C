@@ -21,6 +21,12 @@ public enum ErrorCode {
     /** 처리되지 않은 서버 내부 오류. */
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "C002", "서버 내부 오류입니다."),
 
+    /**
+     * DB 저장 실패. 호출자(결제 서비스 등)가 이 응답을 받으면 재시도해야 한다.
+     * 재시도 시 멱등성 키로 중복 발송이 방지된다.
+     */
+    DB_SAVE_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "C003", "데이터 저장에 실패했습니다. 잠시 후 재시도해 주세요."),
+
     // 알림
     /** 동일 멱등성 키를 가진 알림이 이미 존재함. 중복 발송 방지. */
     DUPLICATE_NOTIFICATION(HttpStatus.CONFLICT, "N001", "이미 처리된 알림 요청입니다."),

@@ -2,7 +2,7 @@ package com.notification.infrastructure.event;
 
 import com.notification.application.event.NotificationCreatedEvent;
 import com.notification.domain.Notification;
-import com.notification.domain.NotificationRepository;
+import com.notification.application.port.out.NotificationRepositoryPort;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -27,7 +27,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 @RequiredArgsConstructor
 public class NotificationEventHandler {
 
-    private final NotificationRepository notificationRepository;
+    private final NotificationRepositoryPort notificationRepository;
 
     /**
      * 알림 생성 이벤트를 수신한다.

@@ -4,6 +4,7 @@ import com.notification.common.exception.ErrorCode;
 import com.notification.common.exception.NotificationException;
 import com.notification.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -43,6 +44,18 @@ public class GlobalExceptionHandler {
         log.warn("Validation failed: {}", detail);
         return ResponseEntity.badRequest()
                 .body(ApiResponse.error(ErrorCode.INVALID_INPUT, detail));
+    }
+
+    /**
+     * DB 저장 실패 처리.
+     * 503으로 응답해 호출자가 재시도하도록 유도한다.
+     * 재시도 시 멱등성 키가 동일하면 중복 저장되지 않는다.
+     */
+    @ExceptionHandler(DataAccessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleDataAccessException(DataAccessException e) {
+        log.error("DB 저장 실패. 호출자 재시도 필요", e);
+        return ResponseEntity.status(ErrorCode.DB_SAVE_FAILED.getHttpStatus())
+                .body(ApiResponse.error(ErrorCode.DB_SAVE_FAILED));
     }
 
     /** 처리되지 않은 모든 예외. 상세 내용은 로그에만 기록하고 클라이언트에는 노출하지 않는다. */

@@ -1,5 +1,6 @@
-package com.notification.domain;
+package com.notification.application.port.out;
 
+import com.notification.domain.Notification;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
@@ -7,12 +8,13 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 알림 저장소 인터페이스.
+ * 알림 저장소 출력 포트.
  *
- * <p>도메인 레이어에 위치하며, 구현체는 infrastructure/repository에 있다.
- * 이렇게 함으로써 도메인이 JPA 등 특정 기술에 의존하지 않는다 (의존성 역전 원칙).</p>
+ * <p>application 레이어가 영속성 기술(JPA 등)에 직접 의존하지 않도록
+ * 필요한 저장소 연산을 인터페이스로 정의한다.
+ * 구현체는 infrastructure/repository에 위치한다 (의존성 역전 원칙).</p>
  */
-public interface NotificationRepository {
+public interface NotificationRepositoryPort {
 
     /** 알림을 저장하고 저장된 엔티티를 반환한다. */
     Notification save(Notification notification);
