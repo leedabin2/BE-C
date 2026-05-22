@@ -6,6 +6,18 @@ import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
+/**
+ * 모든 API 응답에 사용되는 공통 래퍼.
+ *
+ * <pre>
+ * {
+ *   "success": true,
+ *   "code": "S000",
+ *   "message": "요청이 성공적으로 처리되었습니다.",
+ *   "data": { ... }
+ * }
+ * </pre>
+ */
 @Getter
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Schema(description = "공통 응답 구조")

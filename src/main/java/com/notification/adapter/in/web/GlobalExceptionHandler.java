@@ -12,10 +12,20 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.stream.Collectors;
 
+/**
+ * 전역 예외 처리기.
+ *
+ * <p>컨트롤러에서 발생한 예외를 잡아 {@link ApiResponse} 형태로 변환한다.
+ * 예외가 여기서 처리되므로 서비스가 중단되지 않는다.</p>
+ */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    /**
+     * 비즈니스 규칙 위반 예외 처리.
+     * {@link ErrorCode}에 정의된 HTTP 상태와 코드를 그대로 반환한다.
+     */
     @ExceptionHandler(NotificationException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotificationException(NotificationException e) {
         ErrorCode errorCode = e.getErrorCode();
@@ -24,6 +34,7 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(errorCode, e.getMessage()));
     }
 
+    /** {@code @Valid} 유효성 검사 실패 처리. 모든 필드 오류 메시지를 합쳐서 반환한다. */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException e) {
         String detail = e.getBindingResult().getFieldErrors().stream()
@@ -34,6 +45,7 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ErrorCode.INVALID_INPUT, detail));
     }
 
+    /** 처리되지 않은 모든 예외. 상세 내용은 로그에만 기록하고 클라이언트에는 노출하지 않는다. */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleException(Exception e) {
         log.error("Unhandled exception", e);

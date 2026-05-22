@@ -6,11 +6,48 @@ import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 알림 저장소 인터페이스.
+ *
+ * <p>도메인 레이어에 위치하며, 구현체는 infrastructure/repository에 있다.
+ * 이렇게 함으로써 도메인이 JPA 등 특정 기술에 의존하지 않는다 (의존성 역전 원칙).</p>
+ */
 public interface NotificationRepository {
+
+    /** 알림을 저장하고 저장된 엔티티를 반환한다. */
     Notification save(Notification notification);
+
+    /** ID로 알림을 조회한다. */
     Optional<Notification> findById(Long id);
+
+    /**
+     * 멱등성 키 중복 여부를 확인한다.
+     * 동일한 비즈니스 이벤트에 대한 중복 발송 요청을 차단하는 데 사용된다.
+     */
     boolean existsByIdempotencyKey(String idempotencyKey);
+
+    /**
+     * 수신자별 알림 목록을 페이징 조회한다.
+     *
+     * @param receiverId 수신자 ID
+     * @param isRead     읽음 여부 필터. null이면 전체 조회
+     * @param pageable   페이지 정보
+     */
     Page<Notification> findByReceiver(Long receiverId, Boolean isRead, Pageable pageable);
+
+    /**
+     * 처리 대기 중인 알림을 비관적 락(SKIP LOCKED)으로 조회한다.
+     * 다중 인스턴스 환경에서 동일 알림을 여러 스케줄러가 중복 처리하지 않도록 보장한다.
+     *
+     * @param limit 최대 조회 건수
+     */
     List<Notification> findPendingWithLock(int limit);
+
+    /**
+     * PROCESSING 상태로 stuck된 알림을 조회한다.
+     * 서버 재시작 등으로 PROCESSING 상태에서 멈춘 알림을 복구하는 데 사용된다.
+     *
+     * @param minutes 이 시간(분) 이상 PROCESSING 상태인 알림을 대상으로 한다
+     */
     List<Notification> findStuckProcessing(int minutes);
 }
