@@ -6,6 +6,10 @@ import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 
+/**
+ * 모든 API 응답에 사용되는 공통 래퍼.
+ * 성공 시 success=true, code="S000", 실패 시 ErrorCode에 정의된 code/message를 반환한다.
+ */
 @Getter
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @Schema(description = "공통 응답 구조")

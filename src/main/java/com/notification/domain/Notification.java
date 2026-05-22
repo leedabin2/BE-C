@@ -8,6 +8,19 @@ import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 
+/**
+ * 알림 도메인 엔티티.
+ *
+ * 알림의 전체 생명주기를 상태 머신으로 관리한다.
+ *
+ * 상태 전이: PENDING → PROCESSING → SENT
+ *                               → RETRYING → SENT (재시도 성공)
+ *                                          → FAILED (MAX_RETRY_COUNT 초과)
+ *
+ * 인덱스 전략:
+ * idx_retry_fetch - 스케줄러 재처리 대상 조회 (status, next_retry_at, scheduled_at)
+ * idx_user_notification - 사용자별 알림 목록 페이징 조회 (receiver_id, is_read, created_at)
+ */
 @Entity
 @Table(name = "notification",
         indexes = {
@@ -24,12 +37,22 @@ public class Notification {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /**
+     * 중복 발송 방지를 위한 멱등성 키.
+     * SHA-256(notificationType|eventId|receiverId|channel) 으로 생성된다.
+     */
     @Column(nullable = false, unique = true)
     private String idempotencyKey;
 
+    /** 알림 수신자 ID (users 테이블 논리 참조). */
     @Column(nullable = false)
     private Long receiverId;
 
+    /**
+     * 채널별 발송 대상 주소.
+     * EMAIL이면 이메일 주소, IN_APP이면 null.
+     * 추후 SMS 채널 추가 시 전화번호를 담는 범용 컬럼.
+     */
     private String channelTarget;
 
     @Enumerated(EnumType.STRING)
@@ -40,12 +63,17 @@ public class Notification {
     @Column(nullable = false, length = 10)
     private NotificationChannel channel;
 
+    /** 외부 비즈니스 이벤트 식별자. 멱등성 키 생성 재료로 사용된다. */
     @Column(nullable = false)
     private String eventId;
 
+    /** 알림과 연관된 도메인 객체 ID (예: 수강신청 ID, 결제 ID). */
     private Long referenceId;
+
+    /** 알림과 연관된 도메인 타입 (예: ENROLLMENT, PAYMENT). */
     private String referenceType;
 
+    /** 알림 본문에 채울 동적 데이터 (JSON 문자열). */
     @Column(columnDefinition = "TEXT")
     private String contentData;
 
@@ -53,9 +81,15 @@ public class Notification {
     @Column(nullable = false, length = 20)
     private NotificationStatus status;
 
+    /** 현재까지 재시도한 횟수. MAX_RETRY_COUNT(3) 도달 시 FAILED로 전이. */
     private int retryCount;
+
+    /** 다음 재시도 예정 시각. 지수 백오프(1분 → 5분 → 30분) 적용. */
     private LocalDateTime nextRetryAt;
+
+    /** 예약 발송 시각. null이면 즉시 처리 대상. */
     private LocalDateTime scheduledAt;
+
     private boolean isRead;
     private LocalDateTime readAt;
 
@@ -96,14 +130,21 @@ public class Notification {
         this.updatedAt = LocalDateTime.now();
     }
 
+    /** 스케줄러가 발송을 시작할 때 호출. PENDING/RETRYING → PROCESSING. */
     public void startProcessing() {
         this.status = NotificationStatus.PROCESSING;
     }
 
+    /** 발송 성공 시 호출. PROCESSING → SENT. */
     public void markSent() {
         this.status = NotificationStatus.SENT;
     }
 
+    /**
+     * 발송 실패 시 호출. 재시도 횟수를 증가시키고 상태를 전이한다.
+     * MAX_RETRY_COUNT 미만이면 RETRYING + 지수 백오프 시각 계산,
+     * 초과하면 FAILED로 최종 처리.
+     */
     public void markRetrying() {
         this.retryCount++;
         this.status = retryCount >= MAX_RETRY_COUNT
@@ -114,29 +155,41 @@ public class Notification {
                 : null;
     }
 
+    /** 수신자가 알림을 읽었을 때 호출. */
     public void markRead() {
         this.isRead = true;
         this.readAt = LocalDateTime.now();
     }
 
+    /**
+     * 운영자 수동 재시도 시 호출. retryCount를 초기화하고 PENDING으로 되돌린다.
+     * FAILED 상태에서만 의미 있는 호출이다.
+     */
     public void resetForManualRetry() {
         this.retryCount = 0;
         this.status = NotificationStatus.PENDING;
         this.nextRetryAt = LocalDateTime.now();
     }
 
+    /** 최종 실패 여부 확인. */
     public boolean isFailed() {
         return this.status == NotificationStatus.FAILED;
     }
 
+    /** 인앱 채널 여부 확인. 인앱은 channelTarget이 null이고 외부 발송이 없다. */
     public boolean isInApp() {
         return this.channel == NotificationChannel.IN_APP;
     }
 
+    /** 재시도 가능 여부. MAX_RETRY_COUNT 미만인 경우만 true. */
     public boolean canRetry() {
         return this.retryCount < MAX_RETRY_COUNT;
     }
 
+    /**
+     * 지수 백오프 방식으로 다음 재시도 시각을 계산한다.
+     * 1회: 1분 후, 2회: 5분 후, 3회 이상: 30분 후.
+     */
     private LocalDateTime calculateNextRetryAt() {
         return switch (this.retryCount) {
             case 1 -> LocalDateTime.now().plusMinutes(1);
