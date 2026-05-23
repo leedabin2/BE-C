@@ -9,7 +9,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
+
+import jakarta.persistence.QueryHint;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -48,6 +51,7 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
      * @param now   현재 시각 (scheduledAt, nextRetryAt 비교 기준)
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "-2"))
     @Query("SELECT n FROM Notification n WHERE n.status IN :statuses " +
            "AND (n.scheduledAt IS NULL OR n.scheduledAt <= :now) " +
            "AND (n.nextRetryAt IS NULL OR n.nextRetryAt <= :now) " +
