@@ -37,6 +37,20 @@ public class NotificationDispatchService {
      * @param notificationId 발송할 알림 ID
      */
     /**
+     * 트랜잭션 안에서 PENDING/RETRYING 알림을 조회하고 ID만 반환한다.
+     *
+     * PESSIMISTIC_WRITE(SKIP LOCKED)는 트랜잭션이 열려 있어야 동작한다.
+     * 이 메서드가 반환되면 트랜잭션이 커밋되어 DB 락이 해제되고,
+     * 이후 dispatch()가 각자 새 트랜잭션으로 실행된다.
+     */
+    @Transactional
+    public List<Long> fetchPendingIds(int limit) {
+        return notificationRepositoryPort.findPendingWithLock(limit)
+                .stream().map(Notification::getId)
+                .toList();
+    }
+
+    /**
      * Stuck PROCESSING 알림을 PENDING으로 복구한다.
      * 서버 재시작 등으로 PROCESSING 상태에서 멈춘 알림을 감지해 재처리 가능 상태로 되돌린다.
      * 복구 후 재처리 스케줄러가 다음 사이클에 dispatch()를 호출한다.

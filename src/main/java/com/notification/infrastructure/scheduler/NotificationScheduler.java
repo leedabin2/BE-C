@@ -1,8 +1,6 @@
 package com.notification.infrastructure.scheduler;
 
-import com.notification.application.port.out.NotificationRepositoryPort;
 import com.notification.application.service.NotificationDispatchService;
-import com.notification.domain.Notification;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -28,7 +26,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class NotificationScheduler {
 
-    private final NotificationRepositoryPort notificationRepositoryPort;
     private final NotificationDispatchService dispatchService;
 
     @Value("${notification.scheduler.retry.batch-size:100}")
@@ -47,16 +44,16 @@ public class NotificationScheduler {
     @Scheduled(fixedDelayString = "${notification.scheduler.retry.fixed-delay-ms:60000}")
     @SchedulerLock(name = "retryScheduler", lockAtMostFor = "55s", lockAtLeastFor = "10s")
     public void retryScheduler() {
-        List<Notification> pending = notificationRepositoryPort.findPendingWithLock(retryBatchSize);
-        if (pending.isEmpty()) return;
+        // fetchPendingIds 트랜잭션 커밋 시 SKIP LOCKED 해제 → 이후 dispatch는 각자 새 트랜잭션
+        List<Long> ids = dispatchService.fetchPendingIds(retryBatchSize);
+        if (ids.isEmpty()) return;
 
-        log.info("[재처리] 대상 {}건 조회", pending.size());
-        for (Notification n : pending) {
+        log.info("[재처리] 대상 {}건 조회", ids.size());
+        for (Long id : ids) {
             try {
-                dispatchService.dispatch(n.getId());
+                dispatchService.dispatch(id);
             } catch (Exception e) {
-                // 개별 알림 오류가 전체 배치를 중단하지 않도록 catch
-                log.error("[재처리] dispatch 오류. id={}", n.getId(), e);
+                log.error("[재처리] dispatch 오류. id={}", id, e);
             }
         }
     }
@@ -69,7 +66,7 @@ public class NotificationScheduler {
      * 복구된 알림은 retryScheduler 다음 사이클에서 재처리된다.
      */
     @Scheduled(fixedDelayString = "${notification.scheduler.stuck.fixed-delay-ms:300000}")
-    @SchedulerLock(name = "stuckRecoveryScheduler", lockAtMostFor = "4m55s", lockAtLeastFor = "30s")
+    @SchedulerLock(name = "stuckRecoveryScheduler", lockAtMostFor = "PT4M55S", lockAtLeastFor = "PT30S")
     public void stuckRecoveryScheduler() {
         dispatchService.recoverStuck(stuckThresholdMinutes);
     }
