@@ -6,7 +6,10 @@ import com.notification.application.port.in.command.RegisterNotificationCommand;
 import com.notification.application.port.in.result.RegisterNotificationResult;
 import com.notification.application.port.out.NotificationEventPublisherPort;
 import com.notification.application.port.out.NotificationRepositoryPort;
+import com.notification.application.port.out.NotificationLogRepositoryPort;
 import com.notification.domain.Notification;
+import com.notification.domain.NotificationLog;
+import com.notification.domain.NotificationStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,6 +34,7 @@ public class NotificationService implements RegisterNotificationUseCase {
 
     private final NotificationRepositoryPort notificationRepositoryPort;
     private final NotificationEventPublisherPort eventPublisherPort;
+    private final NotificationLogRepositoryPort notificationLogRepositoryPort;
 
     /**
      * 알림 발송을 요청한다.
@@ -68,6 +72,9 @@ public class NotificationService implements RegisterNotificationUseCase {
                 .build();
 
         Notification saved = notificationRepositoryPort.save(notification);
+
+        notificationLogRepositoryPort.save(
+                NotificationLog.of(saved.getId(), null, NotificationStatus.PENDING, "CREATED"));
 
         eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId()));
 
