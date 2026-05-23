@@ -46,4 +46,9 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     public List<Notification> findStuckProcessing(int minutes) {
         return jpaRepository.findStuckProcessing(LocalDateTime.now().minusMinutes(minutes));
     }
+
+    @Override
+    public boolean tryStartProcessing(Long id) {
+        return jpaRepository.tryStartProcessing(id) > 0;
+    }
 }
