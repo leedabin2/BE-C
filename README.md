@@ -1,2 +1,130 @@
-# BE-C
-알림 발송 시스템
+# BE-C — 알림 발송 시스템
+
+## 설계 전제 조건
+
+### 호출 측(결제 서비스 등)의 책임
+
+본 시스템은 결제 완료, 수강신청 완료 등 **외부 비즈니스 서비스가 알림 API를 직접 호출**하는 구조를 가정한다.
+
+이 구조에서 다음 시나리오는 알림 서비스 내부에서 해결할 수 없다:
+
+> 결제 트랜잭션 커밋 성공 → 알림 API 호출 실패 (네트워크 오류, 알림 서버 다운)
+> → 알림 레코드가 DB에 저장되지 않음 → 스케줄러가 감지 불가 → 영구 유실
+
+**따라서 호출 측은 아래 중 하나를 보장해야 한다:**
+
+- **Transactional Outbox Pattern 적용**: 결제 DB에 `outbox` 테이블을 두고, 결제 저장과 "알림 발송 예정" 기록을 같은 트랜잭션으로 커밋. 별도 폴러가 outbox를 읽어 알림 API를 호출하고 성공 시 레코드를 삭제.
+- **재시도 보장**: 알림 API가 503(DB 저장 실패)을 반환하면 호출 측이 멱등성 키를 유지한 채 재시도. 멱등성 키가 동일하면 중복 발송되지 않는다.
+
+### 알림 서비스 내부 보장
+
+알림 레코드가 DB에 저장(PENDING)된 이후부터는 알림 서비스가 신뢰성을 보장한다:
+
+- AFTER_COMMIT 이벤트 발행 실패 또는 서버 재시작 → 스케줄러가 PENDING 레코드를 감지해 재처리
+- 발송 실패 → 지수 백오프(1분 → 5분 → 30분) 재시도, 3회 초과 시 FAILED 처리
+- PROCESSING stuck → 스케줄러가 일정 시간 경과 후 복구
+- DB 일시적 장애 → `@Retryable`로 내부 재시도(최대 3회), 호출 측에 503 노출 최소화
+
+---
+
+## 스케줄러 구조
+
+### 재처리 스케줄러 (1분 주기)
+
+이벤트 핸들러 실패 또는 서버 재시작으로 미처리된 알림을 재발송한다.
+
+```
+[조건] status IN (PENDING, RETRYING)
+       AND scheduledAt <= now      -- 예약 발송 시각 도래
+       AND nextRetryAt <= now      -- 지수 백오프 대기 시간 경과
+         (1회 실패 → 1분, 2회 → 5분, 3회 → 30분)
+
+[흐름] findPendingWithLock(100)
+         → FOR UPDATE SKIP LOCKED  -- 다중 인스턴스 중복 처리 방지
+       → dispatch(id)
+         → CAS tryStartProcessing  -- 이벤트 핸들러 ↔ 스케줄러 경합 방지
+         → send → markSent / markRetrying / markFailed
+```
+
+### 복구 스케줄러 (5분 주기)
+
+서버 장애로 PROCESSING 상태에 stuck된 알림을 감지해 PENDING으로 되돌린다.
+
+```
+[판단 기준] status = PROCESSING AND updatedAt <= now - 10분
+            정상 발송은 최대 30초 이내 완료 → 10분 경과 = 비정상 확정
+
+[흐름] findStuckProcessing(10분)
+       → resetForManualRetry()   -- retryCount 초기화, PENDING 복구
+       → save
+       → 다음 재처리 스케줄러 사이클에서 재처리
+```
+
+### 다중 인스턴스 동시성 방어 3계층
+
+```
+┌─────────────────────┬──────────────────────────────────────────┐
+│ 방어 계층            │ 대상                                      │
+├─────────────────────┼──────────────────────────────────────────┤
+│ ShedLock            │ 스케줄러 인스턴스 간 중복 실행 방지         │
+│ SKIP LOCKED         │ 스케줄러 스레드 간 동일 행 중복 처리 방지   │
+│ CAS (native UPDATE) │ 이벤트 핸들러 ↔ 스케줄러 최종 경합 방지    │
+└─────────────────────┴──────────────────────────────────────────┘
+```
+
+### ShedLock 테이블
+
+ShedLock은 DB에 아래 테이블을 두고 스케줄러 실행권을 관리한다.  
+실행 전 `lock_until > now`인 레코드가 없으면 락을 획득하고 실행, 있으면 이번 사이클 스킵.
+
+```sql
+CREATE TABLE shedlock (
+    name       VARCHAR(64)  NOT NULL,
+    lock_until TIMESTAMP(3) NOT NULL,
+    locked_at  TIMESTAMP(3) NOT NULL,
+    locked_by  VARCHAR(255) NOT NULL,
+    PRIMARY KEY (name)
+);
+```
+
+`lock_until`은 스케줄러 주기보다 짧게 설정한다 (주기 60초 → lock_until 55초).  
+주기보다 길면 정상 종료 후에도 다음 사이클이 막힌다.
+
+---
+
+## 개선 포인트 (미구현)
+
+| 항목 | 현재 | 개선 방향 |
+|------|------|-----------|
+| SKIP LOCKED | `FOR UPDATE`만 적용 (블로킹) | `jakarta.persistence.lock.timeout = -2` 힌트 추가로 `FOR UPDATE SKIP LOCKED` 적용 |
+| 스케줄러 동시 처리 | ShedLock으로 1개 인스턴스만 실행 | SKIP LOCKED 적용 시 여러 인스턴스가 서로 다른 행 병렬 처리 가능 |
+| 즉시 재시도 | 없음 | Resilience4j로 발송 스레드 내 1~2회 즉시 재시도 추가 (DB 상태 변경 없이) |
+| 재시도 브로커 전환 | DB 폴링 방식 | Kafka Delay Topic으로 교체 시 `ChannelSenderPort` 구현체만 교체, 상위 레이어 변경 없음 |
+
+---
+
+## 설계 한계 및 개선 방향
+
+### 현재 구조의 한계
+
+본 시스템은 메시지 브로커 없이 구현되어 다음 한계가 있다:
+
+> DB 완전 다운 시 알림 API 호출 자체가 실패(503)하며, 알림 서비스 내부에서 해당 요청을 보존할 방법이 없다.
+> `@Retryable`로 일시적 장애는 대응하지만, DB 서버가 장기 다운된 경우 요청 유실 가능성이 존재한다.
+
+### 마이크로서비스 전환 시 개선 방향
+
+**1. 메시지 브로커 도입 (Kafka)**
+
+```
+현재: 결제 서비스 → HTTP POST /notifications → 알림 서비스 DB 저장
+전환: 결제 서비스 → Kafka 발행 → 알림 서비스 소비 → DB 저장
+```
+
+Kafka 메시지는 DB 장애와 무관하게 보존되므로, DB 회복 후 소비하면 유실 없이 처리 가능하다.
+
+**2. 전환 비용 최소화 (현재 구조가 이미 준비됨)**
+
+- `NotificationEventPublisherPort` → `KafkaNotificationPublisher` 구현체로 교체
+- `ChannelSenderPort` → 실제 이메일/SMS 어댑터로 교체
+- 상위 레이어(Service, Domain) 코드 변경 없음
