@@ -6,16 +6,16 @@ import com.notification.application.port.in.command.RegisterNotificationCommand;
 import com.notification.application.port.in.result.RegisterNotificationResult;
 import com.notification.application.port.out.NotificationEventPublisherPort;
 import com.notification.application.port.out.NotificationRepositoryPort;
-import com.notification.common.exception.ErrorCode;
-import com.notification.common.exception.NotificationException;
 import com.notification.domain.Notification;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Optional;
 
 /**
  * 알림 발송 요청을 처리하는 애플리케이션 서비스.
@@ -24,6 +24,7 @@ import java.security.NoSuchAlgorithmException;
  * 알림 레코드를 DB에 저장(PENDING)하고, 트랜잭션 커밋 후 발송 이벤트를 발행한다.
  * 커밋 전에 서버가 재시작되면 알림 레코드도 함께 롤백되므로 데이터 유실이 없다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class NotificationService implements RegisterNotificationUseCase {
@@ -47,8 +48,10 @@ public class NotificationService implements RegisterNotificationUseCase {
     public RegisterNotificationResult register(RegisterNotificationCommand command) {
         String idempotencyKey = buildIdempotencyKey(command);
 
-        if (notificationRepositoryPort.existsByIdempotencyKey(idempotencyKey)) {
-            throw new NotificationException(ErrorCode.DUPLICATE_NOTIFICATION);
+        Optional<Notification> existing = notificationRepositoryPort.findByIdempotencyKey(idempotencyKey);
+        if (existing.isPresent()) {
+            log.warn("중복 요청. 기존 결과 반환. idempotencyKey={}", idempotencyKey);
+            return RegisterNotificationResult.from(existing.get());
         }
 
         Notification notification = Notification.builder()
