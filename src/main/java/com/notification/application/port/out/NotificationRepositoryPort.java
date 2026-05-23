@@ -23,10 +23,10 @@ public interface NotificationRepositoryPort {
     Optional<Notification> findById(Long id);
 
     /**
-     * 멱등성 키 중복 여부를 확인한다.
-     * 동일한 비즈니스 이벤트에 대한 중복 발송 요청을 차단하는 데 사용된다.
+     * 멱등성 키로 알림을 조회한다.
+     * 중복 등록 요청 시 기존 결과를 반환하는 데 사용된다.
      */
-    boolean existsByIdempotencyKey(String idempotencyKey);
+    Optional<Notification> findByIdempotencyKey(String idempotencyKey);
 
     /**
      * 수신자별 알림 목록을 페이징 조회한다.
