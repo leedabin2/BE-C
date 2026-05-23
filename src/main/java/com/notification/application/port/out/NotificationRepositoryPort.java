@@ -23,10 +23,10 @@ public interface NotificationRepositoryPort {
     Optional<Notification> findById(Long id);
 
     /**
-     * 멱등성 키 중복 여부를 확인한다.
-     * 동일한 비즈니스 이벤트에 대한 중복 발송 요청을 차단하는 데 사용된다.
+     * 멱등성 키로 알림을 조회한다.
+     * 중복 등록 요청 시 기존 결과를 반환하는 데 사용된다.
      */
-    boolean existsByIdempotencyKey(String idempotencyKey);
+    Optional<Notification> findByIdempotencyKey(String idempotencyKey);
 
     /**
      * 수신자별 알림 목록을 페이징 조회한다.
@@ -52,4 +52,13 @@ public interface NotificationRepositoryPort {
      * @param minutes 이 시간(분) 이상 PROCESSING 상태인 알림을 대상으로 한다
      */
     List<Notification> findStuckProcessing(int minutes);
+
+    /**
+     * CAS(Compare-And-Set) 방식으로 PENDING/RETRYING → PROCESSING 상태 전환.
+     * 이벤트 핸들러와 스케줄러가 동시에 같은 알림을 처리하려 할 때
+     * 먼저 성공한 쪽만 처리하도록 보장한다.
+     *
+     * @return 상태 전환 성공 시 true, 이미 다른 스레드가 선점한 경우 false
+     */
+    boolean tryStartProcessing(Long id);
 }

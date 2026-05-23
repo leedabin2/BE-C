@@ -1,16 +1,19 @@
 package com.notification.infrastructure.repository;
 
 import com.notification.domain.Notification;
+import com.notification.domain.NotificationStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * JPA 기반 알림 저장소.
@@ -19,8 +22,8 @@ import java.util.List;
  */
 public interface NotificationJpaRepository extends JpaRepository<Notification, Long> {
 
-    /** 멱등성 키 존재 여부 확인. */
-    boolean existsByIdempotencyKey(String idempotencyKey);
+    /** 멱등성 키로 알림 조회. */
+    Optional<Notification> findByIdempotencyKey(String idempotencyKey);
 
     /**
      * 수신자별 알림 목록을 최신순으로 페이징 조회한다.
@@ -45,11 +48,13 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
      * @param now   현재 시각 (scheduledAt, nextRetryAt 비교 기준)
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT n FROM Notification n WHERE n.status IN ('PENDING', 'RETRYING') " +
+    @Query("SELECT n FROM Notification n WHERE n.status IN :statuses " +
            "AND (n.scheduledAt IS NULL OR n.scheduledAt <= :now) " +
            "AND (n.nextRetryAt IS NULL OR n.nextRetryAt <= :now) " +
            "ORDER BY n.createdAt ASC LIMIT :limit")
-    List<Notification> findPendingWithLock(@Param("limit") int limit, @Param("now") LocalDateTime now);
+    List<Notification> findPendingWithLock(@Param("limit") int limit,
+                                           @Param("now") LocalDateTime now,
+                                           @Param("statuses") List<NotificationStatus> statuses);
 
     /**
      * PROCESSING 상태에서 일정 시간 이상 멈춰 있는 알림을 조회한다.
@@ -59,7 +64,18 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
      *
      * @param threshold 이 시각 이전에 업데이트된 PROCESSING 알림을 대상으로 한다
      */
-    @Query("SELECT n FROM Notification n WHERE n.status = 'PROCESSING' " +
+    @Query("SELECT n FROM Notification n WHERE n.status = :status " +
            "AND n.updatedAt <= :threshold")
-    List<Notification> findStuckProcessing(@Param("threshold") LocalDateTime threshold);
+    List<Notification> findStuckProcessing(@Param("status") NotificationStatus status,
+                                           @Param("threshold") LocalDateTime threshold);
+
+    /**
+     * CAS(Compare-And-Set) 방식으로 PROCESSING 상태 전환.
+     * clearAutomatically로 1차 캐시를 비워 이후 findById가 최신 상태를 반환하도록 한다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE notification SET status = 'PROCESSING', updated_at = NOW() " +
+                   "WHERE id = :id AND status IN ('PENDING', 'RETRYING')",
+           nativeQuery = true)
+    int tryStartProcessing(@Param("id") Long id);
 }

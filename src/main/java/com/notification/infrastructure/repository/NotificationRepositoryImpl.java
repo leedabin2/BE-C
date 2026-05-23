@@ -1,6 +1,7 @@
 package com.notification.infrastructure.repository;
 
 import com.notification.domain.Notification;
+import com.notification.domain.NotificationStatus;
 import com.notification.application.port.out.NotificationRepositoryPort;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -28,8 +29,8 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     }
 
     @Override
-    public boolean existsByIdempotencyKey(String idempotencyKey) {
-        return jpaRepository.existsByIdempotencyKey(idempotencyKey);
+    public Optional<Notification> findByIdempotencyKey(String idempotencyKey) {
+        return jpaRepository.findByIdempotencyKey(idempotencyKey);
     }
 
     @Override
@@ -39,11 +40,21 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
 
     @Override
     public List<Notification> findPendingWithLock(int limit) {
-        return jpaRepository.findPendingWithLock(limit, LocalDateTime.now());
+        return jpaRepository.findPendingWithLock(
+                limit,
+                LocalDateTime.now(),
+                List.of(NotificationStatus.PENDING, NotificationStatus.RETRYING));
     }
 
     @Override
     public List<Notification> findStuckProcessing(int minutes) {
-        return jpaRepository.findStuckProcessing(LocalDateTime.now().minusMinutes(minutes));
+        return jpaRepository.findStuckProcessing(
+                NotificationStatus.PROCESSING,
+                LocalDateTime.now().minusMinutes(minutes));
+    }
+
+    @Override
+    public boolean tryStartProcessing(Long id) {
+        return jpaRepository.tryStartProcessing(id) > 0;
     }
 }
