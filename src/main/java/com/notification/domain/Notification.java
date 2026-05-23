@@ -87,6 +87,13 @@ public class Notification {
     /** 다음 재시도 예정 시각. 지수 백오프(1분 → 5분 → 30분) 적용. */
     private LocalDateTime nextRetryAt;
 
+    /**
+     * 최종 실패 사유. ChannelFailureCode 이름을 저장한다.
+     * 외부 서비스 오류 메시지 직접 저장 금지 (보안).
+     */
+    @Column(length = 100)
+    private String failureReason;
+
     /** 예약 발송 시각. null이면 즉시 처리 대상. */
     private LocalDateTime scheduledAt;
 
@@ -141,18 +148,32 @@ public class Notification {
     }
 
     /**
-     * 발송 실패 시 호출. 재시도 횟수를 증가시키고 상태를 전이한다.
+     * Retryable 발송 실패 시 호출. 재시도 횟수를 증가시키고 상태를 전이한다.
      * MAX_RETRY_COUNT 미만이면 RETRYING + 지수 백오프 시각 계산,
      * 초과하면 FAILED로 최종 처리.
+     *
+     * @param failureCode ChannelFailureCode 이름 (외부 오류 메시지 금지)
      */
-    public void markRetrying() {
+    public void markRetrying(String failureCode) {
         this.retryCount++;
+        this.failureReason = failureCode;
         this.status = retryCount >= MAX_RETRY_COUNT
                 ? NotificationStatus.FAILED
                 : NotificationStatus.RETRYING;
         this.nextRetryAt = retryCount < MAX_RETRY_COUNT
                 ? calculateNextRetryAt()
                 : null;
+    }
+
+    /**
+     * NonRetryable 발송 실패 시 호출. 재시도 없이 즉시 FAILED 처리한다.
+     *
+     * @param failureCode ChannelFailureCode 이름 (외부 오류 메시지 금지)
+     */
+    public void markFailed(String failureCode) {
+        this.status = NotificationStatus.FAILED;
+        this.failureReason = failureCode;
+        this.nextRetryAt = null;
     }
 
     /** 수신자가 알림을 읽었을 때 호출. */

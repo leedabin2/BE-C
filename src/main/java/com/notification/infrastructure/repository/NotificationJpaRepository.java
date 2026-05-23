@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -62,4 +63,14 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
     @Query("SELECT n FROM Notification n WHERE n.status = 'PROCESSING' " +
            "AND n.updatedAt <= :threshold")
     List<Notification> findStuckProcessing(@Param("threshold") LocalDateTime threshold);
+
+    /**
+     * CAS(Compare-And-Set) 방식으로 PROCESSING 상태 전환.
+     * clearAutomatically로 1차 캐시를 비워 이후 findById가 최신 상태를 반환하도록 한다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE notification SET status = 'PROCESSING', updated_at = NOW() " +
+                   "WHERE id = :id AND status IN ('PENDING', 'RETRYING')",
+           nativeQuery = true)
+    int tryStartProcessing(@Param("id") Long id);
 }
