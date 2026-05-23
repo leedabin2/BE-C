@@ -27,6 +27,82 @@
 
 ---
 
+## 스케줄러 구조
+
+### 재처리 스케줄러 (1분 주기)
+
+이벤트 핸들러 실패 또는 서버 재시작으로 미처리된 알림을 재발송한다.
+
+```
+[조건] status IN (PENDING, RETRYING)
+       AND scheduledAt <= now      -- 예약 발송 시각 도래
+       AND nextRetryAt <= now      -- 지수 백오프 대기 시간 경과
+         (1회 실패 → 1분, 2회 → 5분, 3회 → 30분)
+
+[흐름] findPendingWithLock(100)
+         → FOR UPDATE SKIP LOCKED  -- 다중 인스턴스 중복 처리 방지
+       → dispatch(id)
+         → CAS tryStartProcessing  -- 이벤트 핸들러 ↔ 스케줄러 경합 방지
+         → send → markSent / markRetrying / markFailed
+```
+
+### 복구 스케줄러 (5분 주기)
+
+서버 장애로 PROCESSING 상태에 stuck된 알림을 감지해 PENDING으로 되돌린다.
+
+```
+[판단 기준] status = PROCESSING AND updatedAt <= now - 10분
+            정상 발송은 최대 30초 이내 완료 → 10분 경과 = 비정상 확정
+
+[흐름] findStuckProcessing(10분)
+       → resetForManualRetry()   -- retryCount 초기화, PENDING 복구
+       → save
+       → 다음 재처리 스케줄러 사이클에서 재처리
+```
+
+### 다중 인스턴스 동시성 방어 3계층
+
+```
+┌─────────────────────┬──────────────────────────────────────────┐
+│ 방어 계층            │ 대상                                      │
+├─────────────────────┼──────────────────────────────────────────┤
+│ ShedLock            │ 스케줄러 인스턴스 간 중복 실행 방지         │
+│ SKIP LOCKED         │ 스케줄러 스레드 간 동일 행 중복 처리 방지   │
+│ CAS (native UPDATE) │ 이벤트 핸들러 ↔ 스케줄러 최종 경합 방지    │
+└─────────────────────┴──────────────────────────────────────────┘
+```
+
+### ShedLock 테이블
+
+ShedLock은 DB에 아래 테이블을 두고 스케줄러 실행권을 관리한다.  
+실행 전 `lock_until > now`인 레코드가 없으면 락을 획득하고 실행, 있으면 이번 사이클 스킵.
+
+```sql
+CREATE TABLE shedlock (
+    name       VARCHAR(64)  NOT NULL,
+    lock_until TIMESTAMP(3) NOT NULL,
+    locked_at  TIMESTAMP(3) NOT NULL,
+    locked_by  VARCHAR(255) NOT NULL,
+    PRIMARY KEY (name)
+);
+```
+
+`lock_until`은 스케줄러 주기보다 짧게 설정한다 (주기 60초 → lock_until 55초).  
+주기보다 길면 정상 종료 후에도 다음 사이클이 막힌다.
+
+---
+
+## 개선 포인트 (미구현)
+
+| 항목 | 현재 | 개선 방향 |
+|------|------|-----------|
+| SKIP LOCKED | `FOR UPDATE`만 적용 (블로킹) | `jakarta.persistence.lock.timeout = -2` 힌트 추가로 `FOR UPDATE SKIP LOCKED` 적용 |
+| 스케줄러 동시 처리 | ShedLock으로 1개 인스턴스만 실행 | SKIP LOCKED 적용 시 여러 인스턴스가 서로 다른 행 병렬 처리 가능 |
+| 즉시 재시도 | 없음 | Resilience4j로 발송 스레드 내 1~2회 즉시 재시도 추가 (DB 상태 변경 없이) |
+| 재시도 브로커 전환 | DB 폴링 방식 | Kafka Delay Topic으로 교체 시 `ChannelSenderPort` 구현체만 교체, 상위 레이어 변경 없음 |
+
+---
+
 ## 설계 한계 및 개선 방향
 
 ### 현재 구조의 한계

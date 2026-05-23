@@ -5,7 +5,12 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
+  sql:
+    init:
+      mode: always          # schema.sql 항상 실행 (shedlock 테이블 자동 생성)
+
   jpa:
+    defer-datasource-initialization: true   # JPA DDL 완료 후 schema.sql 실행
     hibernate:
       ddl-auto: update
     properties:
@@ -29,6 +34,15 @@ springdoc:
     operations-sorter: method
   api-docs:
     path: /api-docs
+
+notification:
+  scheduler:
+    retry:
+      fixed-delay-ms: 60000    # 재처리 주기: 1분 (nextRetryAt 최소 단위와 맞춤)
+      batch-size: 100
+    stuck:
+      fixed-delay-ms: 300000   # 복구 주기: 5분
+      threshold-minutes: 10    # 10분 이상 PROCESSING이면 stuck 판정
 
 logging:
   level:
