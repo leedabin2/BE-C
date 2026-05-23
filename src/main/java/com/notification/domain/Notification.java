@@ -137,11 +137,6 @@ public class Notification {
         this.updatedAt = LocalDateTime.now();
     }
 
-    /** 스케줄러가 발송을 시작할 때 호출. PENDING/RETRYING → PROCESSING. */
-    public void startProcessing() {
-        this.status = NotificationStatus.PROCESSING;
-    }
-
     /** 발송 성공 시 호출. PROCESSING → SENT. */
     public void markSent() {
         this.status = NotificationStatus.SENT;
