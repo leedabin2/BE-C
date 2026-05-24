@@ -146,7 +146,7 @@ public void handle(NotificationCreatedEvent event) {
 
 **스케줄러가 필요한 이유**
 
-`@TransactionalEventListener(AFTER_COMMIT)` + `@Async`로 커밋 직후 발송을 시도하지만, 이 경로는 "최선 노력(best-effort)"입니다. 이벤트 핸들러 실행 중 서버가 비정상 종료되거나 스레드 풀이 포화 상태이면 발송이 누락됩니다. 이 경우 PENDING 상태로 남은 레코드를 스케줄러가 주기적으로 폴링해 재처리합니다.
+`@TransactionalEventListener(AFTER_COMMIT)` + `@Async`로 커밋 직후 발송을 시도하지만,이벤트 핸들러 실행 중 서버가 비정상 종료되거나 스레드 풀이 포화 상태이면 발송이 누락됩니다. 이 경우 PENDING 상태로 남은 레코드를 스케줄러가 주기적으로 폴링해 재처리합니다.
 
 | 구분 | 역할 |
 |------|------|
@@ -178,23 +178,21 @@ String raw = type + "|" + eventId + "|" + receiverId + "|" + channel;
 
 ---
 
-### 외부 채널 At-Least-Once 한계와 개선 방향
-
-#### 한계
+### 외부 채널 At-Least-Once 한계
 
 `send()`는 DB 트랜잭션 바깥에서 실행됩니다. "외부 이메일 API 호출은 성공했지만 직후 서버가 죽어서 DB 커밋이 안 된" 경우, 재시도 시 메일이 두 번 발송될 수 있습니다. 이 시스템은 **At-Least-Once** 보장이며, Exactly-Once는 보장하지 않습니다.
 
 현재 `LogChannelSenderAdapter`는 로그 출력만 하므로 부수효과가 없어 이 문제가 실제로 발생하지 않습니다.
 
-#### 개선 방향
+**개선 방향 — 외부 API MessageId 기반 중복 제거**
 
-**1. 외부 API MessageId 기반 중복 제거**
+SendGrid는 `batch_id`, AWS SES는 발신 시 반환되는 `MessageId`를 `dispatch_history`에 저장해두면, 재시도 전에 해당 ID로 발송 여부를 조회해 중복 발송을 방지할 수 있습니다. API마다 지원 방식이 다르므로 채널 어댑터별로 구현해야 합니다.
 
-SendGrid는 `batch_id`, AWS SES는 발신 시 반환되는 `MessageId`를 `dispatch_history`에 저장해두면, 재시도 전에 해당 ID로 발송 여부를 조회해 중복을 방지할 수 있습니다. 단, API마다 지원 방식이 다르므로 채널 어댑터별로 구현해야 합니다.
+---
 
-**2. CDC(Change Data Capture)로 폴링 스케줄러 대체**
+### 발송 지연 개선 방향 — CDC(Change Data Capture)
 
-현재는 1분마다 DB를 폴링하는 스케줄러로 PENDING 레코드를 처리합니다. Debezium 같은 CDC 도구를 도입하면 DB 트랜잭션 로그(binlog)를 실시간으로 읽어 Kafka로 스트리밍할 수 있습니다. 폴링 없이 레코드가 INSERT되는 즉시 컨슈머가 처리하므로 발송 지연이 1분에서 수백 밀리초 수준으로 줄어듭니다. 다만 Debezium + Kafka 인프라가 추가로 필요합니다.
+현재는 1분마다 DB를 폴링하는 스케줄러로 PENDING 레코드를 처리하므로 등록 후 최대 1분의 발송 지연이 생깁니다. Debezium 같은 CDC 도구를 도입하면 DB 트랜잭션 로그(binlog)를 실시간으로 읽어 Kafka로 스트리밍할 수 있습니다. 레코드가 INSERT되는 즉시 컨슈머가 처리하므로 발송 지연이 수백 밀리초 수준으로 줄어듭니다. 다만 Debezium + Kafka 인프라가 추가로 필요합니다.
 
 ---
 
@@ -482,7 +480,7 @@ Mock으로 DB 의존성을 제거하고 서비스 로직만 검증합니다.
 | 영역 | 활용 방식 |
 |------|---------|
 | **초기 설계 검토** | 헥사고날 구조, 상태 전이, 재시도 정책 설계 방향 질의 및 피드백 |
-| **코드 구현** | 멱등성 키 생성 로직, CAS 쿼리, SKIP LOCKED 쿼리, 지수 백오프 로직 피드백 |
+| **코드 구현** | 멱등성 키 생성 로직, 조건부 UPDATE 쿼리, SKIP LOCKED 쿼리, 지수 백오프 로직 피드백 |
 | **버그 발견 및 수정** | `scheduledAt` 미래 발송 즉시 트리거 버그, `recoverStuck` 비-CAS 경합 문제, `DataIntegrityViolationException` catch 위치 문제 등 엣지 케이스 분석 |
 | **테스트 코드** | 시나리오별 통합 테스트 초안 작성 및 `@PreUpdate` 우회를 위한 JdbcTemplate 전략 제안 |
 | **리팩토링** | `recordFailure()` 메서드 추출, 검증 로직(`@ValidChannelTarget`) 분리, 예외 핸들러 구조 개선 |
