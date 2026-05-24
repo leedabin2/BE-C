@@ -19,6 +19,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -96,7 +97,7 @@ public class NotificationController {
     public ResponseEntity<ApiResponse<Page<NotificationDetailResponse>>> getByReceiver(
             @Parameter(hidden = true) @CurrentUserId Long requesterId,
             @RequestParam(required = false) Boolean isRead,
-            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+            @ParameterObject @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         Page<NotificationDetailResult> results = getNotificationUseCase.getByReceiver(requesterId, isRead, pageable);
         return ResponseEntity.ok(ApiResponse.success(results.map(NotificationDetailResponse::from)));
