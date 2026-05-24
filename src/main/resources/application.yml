@@ -46,4 +46,5 @@ notification:
 
 logging:
   level:
+    root: INFO
     # com.notification: DEBUG

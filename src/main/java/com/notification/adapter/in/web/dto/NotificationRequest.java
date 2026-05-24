@@ -1,5 +1,6 @@
 package com.notification.adapter.in.web.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.notification.adapter.in.web.validation.ValidChannelTarget;
 import com.notification.domain.NotificationChannel;
 import com.notification.domain.NotificationType;
@@ -42,7 +43,8 @@ public record NotificationRequest(
         @Schema(description = "참조 도메인 타입", example = "ENROLLMENT")
         String referenceType,
 
-        @Schema(description = "알림 본문 JSON", example = "{\"courseName\":\"Spring Boot 완성\"}")
+        @Schema(description = "알림 본문 JSON (문자열 또는 오브젝트 모두 허용)", example = "{\"courseName\":\"Spring Boot 완성\"}")
+        @JsonDeserialize(using = JsonStringDeserializer.class)
         @Size(max = 65535, message = "contentData는 65535자를 초과할 수 없습니다.")
         String contentData,
 
