@@ -1,5 +1,6 @@
 package com.notification.adapter.in.web.dto;
 
+import com.notification.adapter.in.web.validation.ValidChannelTarget;
 import com.notification.domain.NotificationChannel;
 import com.notification.domain.NotificationType;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -11,6 +12,7 @@ import jakarta.validation.constraints.Size;
 import java.time.LocalDateTime;
 
 @Schema(description = "알림 발송 요청")
+@ValidChannelTarget
 public record NotificationRequest(
 
         @Schema(description = "수신자 ID (1 이상)", example = "42")
