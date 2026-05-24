@@ -1,0 +1,29 @@
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  sql:
+    init:
+      mode: always
+
+  jpa:
+    defer-datasource-initialization: true
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+    show-sql: false
+
+notification:
+  scheduler:
+    retry:
+      fixed-delay-ms: 60000
+      batch-size: 100
+    stuck:
+      fixed-delay-ms: 300000
+      threshold-minutes: 10
+
+logging:
+  level:
+    com.notification: INFO
