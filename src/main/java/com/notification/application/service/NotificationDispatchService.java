@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -44,17 +45,20 @@ public class NotificationDispatchService {
      */
     @Transactional
     public void recoverStuck(int thresholdMinutes) {
+        LocalDateTime threshold = LocalDateTime.now().minusMinutes(thresholdMinutes);
         List<Notification> stuckList = notificationRepositoryPort.findStuckProcessing(thresholdMinutes);
         if (stuckList.isEmpty()) return;
 
         log.warn("[복구] Stuck PROCESSING 알림 {}건 감지", stuckList.size());
         stuckList.forEach(n -> {
-            NotificationStatus prev = n.getStatus();
-            n.resetForManualRetry();
-            notificationRepositoryPort.save(n);
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(n.getId(), prev, NotificationStatus.PENDING, "STUCK_RECOVERY"));
-            log.warn("[복구] PENDING 복구 완료. id={}", n.getId());
+            // CAS UPDATE: status가 이미 SENT/FAILED로 바뀐 경우 0행 업데이트로 안전 스킵
+            if (notificationRepositoryPort.tryRecoverStuck(n.getId(), threshold)) {
+                notificationLogRepositoryPort.save(
+                        NotificationLog.of(n.getId(), NotificationStatus.PROCESSING, NotificationStatus.PENDING, "STUCK_RECOVERY"));
+                log.warn("[복구] PENDING 복구 완료. id={}", n.getId());
+            } else {
+                log.debug("[복구] 이미 처리 완료 상태. 스킵. id={}", n.getId());
+            }
         });
     }
 

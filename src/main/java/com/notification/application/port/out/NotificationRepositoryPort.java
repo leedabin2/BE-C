@@ -4,6 +4,7 @@ import com.notification.domain.Notification;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -61,4 +62,14 @@ public interface NotificationRepositoryPort {
      * @return 상태 전환 성공 시 true, 이미 다른 스레드가 선점한 경우 false
      */
     boolean tryStartProcessing(Long id);
+
+    /**
+     * CAS 방식으로 PROCESSING → PENDING 복구.
+     * status가 이미 SENT/FAILED로 바뀐 경우 0행 업데이트로 안전하게 스킵한다.
+     *
+     * @param id        알림 ID
+     * @param threshold 이 시각 이전에 updated_at인 PROCESSING 행만 대상
+     * @return 복구 성공 시 true
+     */
+    boolean tryRecoverStuck(Long id, LocalDateTime threshold);
 }

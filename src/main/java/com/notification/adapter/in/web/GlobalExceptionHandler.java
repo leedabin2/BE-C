@@ -63,6 +63,14 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(ErrorCode.INVALID_INPUT, "정렬 파라미터가 올바르지 않습니다."));
     }
 
+    /** 동시 중복 등록 경합 후 기존 알림 조회 실패 시 503 응답. 클라이언트 재시도로 멱등하게 처리 가능. */
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalStateException(IllegalStateException e) {
+        log.error("내부 상태 오류: {}", e.getMessage());
+        return ResponseEntity.status(ErrorCode.DB_SAVE_FAILED.getHttpStatus())
+                .body(ApiResponse.error(ErrorCode.DB_SAVE_FAILED));
+    }
+
     /**
      * DB 저장 실패 처리.
      * 503으로 응답해 호출자가 재시도하도록 유도한다.
