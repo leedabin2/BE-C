@@ -39,10 +39,9 @@ public class NotificationController {
 
     @Operation(summary = "알림 발송 요청", description = "알림을 등록하고 비동기로 발송합니다.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "요청 접수 완료",
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "요청 접수 완료 (중복 요청 시 기존 알림 반환)",
                     content = @Content(schema = @Schema(implementation = NotificationResponse.class))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "중복 요청 (멱등성 키 충돌)")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청")
     })
     @PostMapping
     public ResponseEntity<ApiResponse<NotificationResponse>> register(
