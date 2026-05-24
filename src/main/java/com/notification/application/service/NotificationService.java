@@ -12,7 +12,10 @@ import com.notification.domain.NotificationLog;
 import com.notification.domain.NotificationStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -35,6 +38,10 @@ public class NotificationService implements RegisterNotificationUseCase {
     private final NotificationRepositoryPort notificationRepositoryPort;
     private final NotificationEventPublisherPort eventPublisherPort;
     private final NotificationLogRepositoryPort notificationLogRepositoryPort;
+
+    // self-injection: DataIntegrityViolationException catch 후 새 트랜잭션으로 조회하기 위해 프록시 경유
+    @Autowired
+    private NotificationService self;
 
     /**
      * 알림 발송을 요청한다.
@@ -71,7 +78,13 @@ public class NotificationService implements RegisterNotificationUseCase {
                 .scheduledAt(command.scheduledAt())
                 .build();
 
-        Notification saved = notificationRepositoryPort.save(notification);
+        Notification saved;
+        try {
+            saved = notificationRepositoryPort.save(notification);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("동시 중복 등록 감지. 기존 알림 반환. idempotencyKey={}", idempotencyKey);
+            return self.findExistingByCommand(command);
+        }
 
         notificationLogRepositoryPort.save(
                 NotificationLog.of(saved.getId(), null, NotificationStatus.PENDING, "CREATED"));
@@ -88,7 +101,7 @@ public class NotificationService implements RegisterNotificationUseCase {
      * 롤백된 트랜잭션의 영향 없이 기존 레코드를 읽는다.
      */
     @Override
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
     public RegisterNotificationResult findExistingByCommand(RegisterNotificationCommand command) {
         String idempotencyKey = buildIdempotencyKey(command);
         return notificationRepositoryPort.findByIdempotencyKey(idempotencyKey)

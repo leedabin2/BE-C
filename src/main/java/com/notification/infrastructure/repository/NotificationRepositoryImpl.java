@@ -57,4 +57,9 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     public boolean tryStartProcessing(Long id) {
         return jpaRepository.tryStartProcessing(id) > 0;
     }
+
+    @Override
+    public boolean tryRecoverStuck(Long id, LocalDateTime threshold) {
+        return jpaRepository.tryRecoverStuck(id, threshold) > 0;
+    }
 }
