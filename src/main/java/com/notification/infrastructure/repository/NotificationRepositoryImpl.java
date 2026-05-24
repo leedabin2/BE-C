@@ -24,6 +24,11 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     }
 
     @Override
+    public Notification saveAndFlush(Notification notification) {
+        return jpaRepository.saveAndFlush(notification);
+    }
+
+    @Override
     public Optional<Notification> findById(Long id) {
         return jpaRepository.findById(id);
     }
@@ -56,5 +61,10 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     @Override
     public boolean tryStartProcessing(Long id) {
         return jpaRepository.tryStartProcessing(id) > 0;
+    }
+
+    @Override
+    public boolean tryRecoverStuck(Long id, LocalDateTime threshold) {
+        return jpaRepository.tryRecoverStuck(id, threshold) > 0;
     }
 }

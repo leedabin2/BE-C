@@ -16,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Slf4j
@@ -44,17 +45,20 @@ public class NotificationDispatchService {
      */
     @Transactional
     public void recoverStuck(int thresholdMinutes) {
+        LocalDateTime threshold = LocalDateTime.now().minusMinutes(thresholdMinutes);
         List<Notification> stuckList = notificationRepositoryPort.findStuckProcessing(thresholdMinutes);
         if (stuckList.isEmpty()) return;
 
         log.warn("[복구] Stuck PROCESSING 알림 {}건 감지", stuckList.size());
         stuckList.forEach(n -> {
-            NotificationStatus prev = n.getStatus();
-            n.resetForManualRetry();
-            notificationRepositoryPort.save(n);
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(n.getId(), prev, NotificationStatus.PENDING, "STUCK_RECOVERY"));
-            log.warn("[복구] PENDING 복구 완료. id={}", n.getId());
+            // CAS UPDATE: status가 이미 SENT/FAILED로 바뀐 경우 0행 업데이트로 안전 스킵
+            if (notificationRepositoryPort.tryRecoverStuck(n.getId(), threshold)) {
+                notificationLogRepositoryPort.save(
+                        NotificationLog.of(n.getId(), NotificationStatus.PROCESSING, NotificationStatus.PENDING, "STUCK_RECOVERY"));
+                log.warn("[복구] PENDING 복구 완료. id={}", n.getId());
+            } else {
+                log.debug("[복구] 이미 처리 완료 상태. 스킵. id={}", n.getId());
+            }
         });
     }
 
@@ -91,34 +95,28 @@ public class NotificationDispatchService {
 
         } catch (RetryableChannelException e) {
             notification.markRetrying(e.getFailureCode().name());
-            dispatchHistoryRepositoryPort.save(
-                    DispatchHistory.failure(notificationId, attemptNumber, e.getFailureCode().name()));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING,
-                            notification.getStatus(), e.getFailureCode().name()));
+            recordFailure(notificationId, attemptNumber, e.getFailureCode().name(), notification.getStatus());
             log.warn("재시도 가능 발송 실패. id={}, code={}, retryCount={}",
                     notificationId, e.getFailureCode(), notification.getRetryCount());
 
         } catch (NonRetryableChannelException e) {
             notification.markFailed(e.getFailureCode().name());
-            dispatchHistoryRepositoryPort.save(
-                    DispatchHistory.failure(notificationId, attemptNumber, e.getFailureCode().name()));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING,
-                            NotificationStatus.FAILED, e.getFailureCode().name()));
+            recordFailure(notificationId, attemptNumber, e.getFailureCode().name(), NotificationStatus.FAILED);
             log.error("재시도 불가 발송 실패. id={}, code={}", notificationId, e.getFailureCode());
 
         } catch (Exception e) {
             notification.markRetrying(ChannelFailureCode.CHANNEL_UNAVAILABLE.name());
-            dispatchHistoryRepositoryPort.save(
-                    DispatchHistory.failure(notificationId, attemptNumber, ChannelFailureCode.CHANNEL_UNAVAILABLE.name()));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING,
-                            notification.getStatus(), ChannelFailureCode.CHANNEL_UNAVAILABLE.name()));
+            recordFailure(notificationId, attemptNumber, ChannelFailureCode.CHANNEL_UNAVAILABLE.name(), notification.getStatus());
             log.error("예상치 못한 발송 오류. id={}", notificationId, e);
 
         } finally {
             notificationRepositoryPort.save(notification);
         }
+    }
+
+    private void recordFailure(Long notificationId, int attemptNumber, String failureCode, NotificationStatus toStatus) {
+        dispatchHistoryRepositoryPort.save(DispatchHistory.failure(notificationId, attemptNumber, failureCode));
+        notificationLogRepositoryPort.save(
+                NotificationLog.of(notificationId, NotificationStatus.PROCESSING, toStatus, failureCode));
     }
 }

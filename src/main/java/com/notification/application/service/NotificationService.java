@@ -12,7 +12,11 @@ import com.notification.domain.NotificationLog;
 import com.notification.domain.NotificationStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -35,6 +39,12 @@ public class NotificationService implements RegisterNotificationUseCase {
     private final NotificationRepositoryPort notificationRepositoryPort;
     private final NotificationEventPublisherPort eventPublisherPort;
     private final NotificationLogRepositoryPort notificationLogRepositoryPort;
+
+    // self-injection: DataIntegrityViolationException catch 후 새 트랜잭션으로 조회하기 위해 프록시 경유
+    // @Lazy로 순환 참조 해결 (자기 자신을 주입할 때 발생하는 BeanCurrentlyInCreationException 방지)
+    @Lazy
+    @Autowired
+    private NotificationService self;
 
     /**
      * 알림 발송을 요청한다.
@@ -71,14 +81,36 @@ public class NotificationService implements RegisterNotificationUseCase {
                 .scheduledAt(command.scheduledAt())
                 .build();
 
-        Notification saved = notificationRepositoryPort.save(notification);
+        Notification saved;
+        try {
+            saved = notificationRepositoryPort.saveAndFlush(notification);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("동시 중복 등록 감지. 기존 알림 반환. idempotencyKey={}", idempotencyKey);
+            return self.findExistingByCommand(command);
+        }
 
         notificationLogRepositoryPort.save(
                 NotificationLog.of(saved.getId(), null, NotificationStatus.PENDING, "CREATED"));
 
-        eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId()));
+        eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId(), saved.getScheduledAt()));
 
         return RegisterNotificationResult.from(saved);
+    }
+
+    /**
+     * 동시 중복 등록 경합 발생 후 기존 알림을 조회한다.
+     *
+     * DataIntegrityViolationException 이후 별도 트랜잭션에서 호출돼
+     * 롤백된 트랜잭션의 영향 없이 기존 레코드를 읽는다.
+     */
+    @Override
+    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
+    public RegisterNotificationResult findExistingByCommand(RegisterNotificationCommand command) {
+        String idempotencyKey = buildIdempotencyKey(command);
+        return notificationRepositoryPort.findByIdempotencyKey(idempotencyKey)
+                .map(RegisterNotificationResult::from)
+                .orElseThrow(() -> new IllegalStateException(
+                        "경합 후 기존 알림 조회 실패. idempotencyKey=" + idempotencyKey));
     }
 
     /**

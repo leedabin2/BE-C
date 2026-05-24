@@ -1,0 +1,25 @@
+spring:
+  sql:
+    init:
+      mode: never   # create-drop이 테이블 관리, schema.sql(shedlock·FK) 불필요
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+    show-sql: false
+
+notification:
+  scheduler:
+    retry:
+      fixed-delay-ms: 60000
+      batch-size: 100
+    stuck:
+      fixed-delay-ms: 300000
+      threshold-minutes: 10
+
+logging:
+  level:
+    com.notification: INFO
+    org.hibernate.SQL: WARN

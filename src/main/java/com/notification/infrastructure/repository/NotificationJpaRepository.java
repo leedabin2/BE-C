@@ -82,4 +82,10 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
                    "WHERE id = :id AND status IN ('PENDING', 'RETRYING')",
            nativeQuery = true)
     int tryStartProcessing(@Param("id") Long id);
+
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE notification SET status = 'PENDING', retry_count = 0, next_retry_at = NULL, updated_at = NOW() " +
+                   "WHERE id = :id AND status = 'PROCESSING' AND updated_at <= :threshold",
+           nativeQuery = true)
+    int tryRecoverStuck(@Param("id") Long id, @Param("threshold") LocalDateTime threshold);
 }

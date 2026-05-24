@@ -18,6 +18,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -25,6 +27,7 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+@Slf4j
 @Tag(name = "Notification", description = "알림 API")
 @RestController
 @RequestMapping("/api/v1/notifications")
@@ -36,10 +39,9 @@ public class NotificationController {
 
     @Operation(summary = "알림 발송 요청", description = "알림을 등록하고 비동기로 발송합니다.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "요청 접수 완료",
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "요청 접수 완료 (중복 요청 시 기존 알림 반환)",
                     content = @Content(schema = @Schema(implementation = NotificationResponse.class))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "중복 요청 (멱등성 키 충돌)")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "잘못된 요청")
     })
     @PostMapping
     public ResponseEntity<ApiResponse<NotificationResponse>> register(
@@ -86,7 +88,7 @@ public class NotificationController {
     public ResponseEntity<ApiResponse<Page<NotificationDetailResponse>>> getByReceiver(
             @Parameter(hidden = true) @CurrentUserId Long requesterId,
             @RequestParam(required = false) Boolean isRead,
-            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
+            @ParameterObject @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         Page<NotificationDetailResult> results = getNotificationUseCase.getByReceiver(requesterId, isRead, pageable);
         return ResponseEntity.ok(ApiResponse.success(results.map(NotificationDetailResponse::from)));

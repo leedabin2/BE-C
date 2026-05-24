@@ -4,6 +4,7 @@ import com.notification.domain.Notification;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,6 +19,14 @@ public interface NotificationRepositoryPort {
 
     /** 알림을 저장하고 저장된 엔티티를 반환한다. */
     Notification save(Notification notification);
+
+    /**
+     * 알림을 저장하고 즉시 flush한다.
+     * Hibernate는 save() 이후 실제 INSERT를 커밋 직전까지 지연할 수 있어,
+     * DataIntegrityViolationException이 catch 범위 바깥(커밋 시점)에서 발생한다.
+     * 중복 키 예외를 save() 직후에 잡아야 하는 경우 이 메서드를 사용한다.
+     */
+    Notification saveAndFlush(Notification notification);
 
     /** ID로 알림을 조회한다. */
     Optional<Notification> findById(Long id);
@@ -61,4 +70,14 @@ public interface NotificationRepositoryPort {
      * @return 상태 전환 성공 시 true, 이미 다른 스레드가 선점한 경우 false
      */
     boolean tryStartProcessing(Long id);
+
+    /**
+     * CAS 방식으로 PROCESSING → PENDING 복구.
+     * status가 이미 SENT/FAILED로 바뀐 경우 0행 업데이트로 안전하게 스킵한다.
+     *
+     * @param id        알림 ID
+     * @param threshold 이 시각 이전에 updated_at인 PROCESSING 행만 대상
+     * @return 복구 성공 시 true
+     */
+    boolean tryRecoverStuck(Long id, LocalDateTime threshold);
 }
