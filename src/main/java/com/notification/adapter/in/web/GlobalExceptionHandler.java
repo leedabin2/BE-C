@@ -5,6 +5,7 @@ import com.notification.common.exception.NotificationException;
 import com.notification.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -52,6 +53,14 @@ public class GlobalExceptionHandler {
         log.warn("Validation failed: {}", detail);
         return ResponseEntity.badRequest()
                 .body(ApiResponse.error(ErrorCode.INVALID_INPUT, detail));
+    }
+
+    /** 잘못된 정렬 파라미터 등 API 사용 오류 처리. */
+    @ExceptionHandler(InvalidDataAccessApiUsageException.class)
+    public ResponseEntity<ApiResponse<Void>> handleInvalidDataAccessApiUsageException(InvalidDataAccessApiUsageException e) {
+        log.warn("잘못된 쿼리 파라미터: {}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.error(ErrorCode.INVALID_INPUT, "정렬 파라미터가 올바르지 않습니다."));
     }
 
     /**
