@@ -16,7 +16,7 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
-        format_sql: true
+        # format_sql: true
     # show-sql: true
     open-in-view: false
 
@@ -46,4 +46,4 @@ notification:
 
 logging:
   level:
-    com.notification: DEBUG
+    # com.notification: DEBUG

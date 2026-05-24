@@ -19,3 +19,4 @@ notification:
 logging:
   level:
     com.notification: INFO
+    org.hibernate.SQL: WARN
