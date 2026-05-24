@@ -84,7 +84,7 @@ public class Notification {
     /** 현재까지 재시도한 횟수. MAX_RETRY_COUNT(3) 도달 시 FAILED로 전이. */
     private int retryCount;
 
-    /** 다음 재시도 예정 시각. 지수 백오프(1분 → 5분 → 30분) 적용. */
+    /** 다음 재시도 예정 시각. 지수 백오프(1분 → 5분) 적용. 3회 도달 시 FAILED로 확정. */
     private LocalDateTime nextRetryAt;
 
     /**
@@ -204,13 +204,14 @@ public class Notification {
 
     /**
      * 지수 백오프 방식으로 다음 재시도 시각을 계산한다.
-     * 1회: 1분 후, 2회: 5분 후, 3회 이상: 30분 후.
+     * 1회 실패 후: 1분, 2회 실패 후: 5분.
+     * 3회 실패는 markRetrying에서 FAILED로 분기하므로 이 메서드에 도달하지 않는다.
      */
     private LocalDateTime calculateNextRetryAt() {
         return switch (this.retryCount) {
             case 1 -> LocalDateTime.now().plusMinutes(1);
             case 2 -> LocalDateTime.now().plusMinutes(5);
-            default -> LocalDateTime.now().plusMinutes(30);
+            default -> throw new IllegalStateException("도달 불가: retryCount=" + retryCount);
         };
     }
 }

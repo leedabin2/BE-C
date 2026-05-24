@@ -19,7 +19,8 @@ import java.util.List;
  *
  * ShedLock이 다중 인스턴스 환경에서 한 인스턴스만 실행하도록 보장한다 (1차 방어).
  * findPendingWithLock의 SKIP LOCKED가 스레드 간 중복 행 처리를 방지한다 (2차 방어).
- * dispatch() 내부의 CAS가 이벤트 핸들러와의 최종 경합을 방지한다 (3차 방어).
+ * dispatch() 내부의 조건부 UPDATE가 이벤트 핸들러와의 최종 경합을 방지한다 (3차 방어).
+ * recoverStuck의 조건부 UPDATE가 stuck 복구 시 이미 완료된 행을 안전 스킵한다 (4차 방어).
  */
 @Slf4j
 @Component
