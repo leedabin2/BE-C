@@ -1,130 +1,459 @@
-# BE-C — 알림 발송 시스템
+# 알림 발송 시스템 (BE-C)
 
-## 설계 전제 조건
-
-### 호출 측(결제 서비스 등)의 책임
-
-본 시스템은 결제 완료, 수강신청 완료 등 **외부 비즈니스 서비스가 알림 API를 직접 호출**하는 구조를 가정한다.
-
-이 구조에서 다음 시나리오는 알림 서비스 내부에서 해결할 수 없다:
-
-> 결제 트랜잭션 커밋 성공 → 알림 API 호출 실패 (네트워크 오류, 알림 서버 다운)
-> → 알림 레코드가 DB에 저장되지 않음 → 스케줄러가 감지 불가 → 영구 유실
-
-**따라서 호출 측은 아래 중 하나를 보장해야 한다:**
-
-- **Transactional Outbox Pattern 적용**: 결제 DB에 `outbox` 테이블을 두고, 결제 저장과 "알림 발송 예정" 기록을 같은 트랜잭션으로 커밋. 별도 폴러가 outbox를 읽어 알림 API를 호출하고 성공 시 레코드를 삭제.
-- **재시도 보장**: 알림 API가 503(DB 저장 실패)을 반환하면 호출 측이 멱등성 키를 유지한 채 재시도. 멱등성 키가 동일하면 중복 발송되지 않는다.
-
-### 알림 서비스 내부 보장
-
-알림 레코드가 DB에 저장(PENDING)된 이후부터는 알림 서비스가 신뢰성을 보장한다:
-
-- AFTER_COMMIT 이벤트 발행 실패 또는 서버 재시작 → 스케줄러가 PENDING 레코드를 감지해 재처리
-- 발송 실패 → 지수 백오프(1분 → 5분 → 30분) 재시도, 3회 초과 시 FAILED 처리
-- PROCESSING stuck → 스케줄러가 일정 시간 경과 후 복구
-- DB 일시적 장애 → `@Retryable`로 내부 재시도(최대 3회), 호출 측에 503 노출 최소화
+> 수강 신청 완료, 결제 확정 등 비즈니스 이벤트 발생 시 이메일 또는 인앱 알림을 안정적으로 발송하는 백엔드 시스템입니다.
 
 ---
 
-## 스케줄러 구조
+## 목차
 
-### 재처리 스케줄러 (1분 주기)
-
-이벤트 핸들러 실패 또는 서버 재시작으로 미처리된 알림을 재발송한다.
-
-```
-[조건] status IN (PENDING, RETRYING)
-       AND scheduledAt <= now      -- 예약 발송 시각 도래
-       AND nextRetryAt <= now      -- 지수 백오프 대기 시간 경과
-         (1회 실패 → 1분, 2회 → 5분, 3회 → 30분)
-
-[흐름] findPendingWithLock(100)
-         → FOR UPDATE SKIP LOCKED  -- 다중 인스턴스 중복 처리 방지
-       → dispatch(id)
-         → CAS tryStartProcessing  -- 이벤트 핸들러 ↔ 스케줄러 경합 방지
-         → send → markSent / markRetrying / markFailed
-```
-
-### 복구 스케줄러 (5분 주기)
-
-서버 장애로 PROCESSING 상태에 stuck된 알림을 감지해 PENDING으로 되돌린다.
-
-```
-[판단 기준] status = PROCESSING AND updatedAt <= now - 10분
-            정상 발송은 최대 30초 이내 완료 → 10분 경과 = 비정상 확정
-
-[흐름] findStuckProcessing(10분)
-       → resetForManualRetry()   -- retryCount 초기화, PENDING 복구
-       → save
-       → 다음 재처리 스케줄러 사이클에서 재처리
-```
-
-### 다중 인스턴스 동시성 방어 3계층
-
-```
-┌─────────────────────┬──────────────────────────────────────────┐
-│ 방어 계층            │ 대상                                      │
-├─────────────────────┼──────────────────────────────────────────┤
-│ ShedLock            │ 스케줄러 인스턴스 간 중복 실행 방지         │
-│ SKIP LOCKED         │ 스케줄러 스레드 간 동일 행 중복 처리 방지   │
-│ CAS (native UPDATE) │ 이벤트 핸들러 ↔ 스케줄러 최종 경합 방지    │
-└─────────────────────┴──────────────────────────────────────────┘
-```
-
-### ShedLock 테이블
-
-ShedLock은 DB에 아래 테이블을 두고 스케줄러 실행권을 관리한다.  
-실행 전 `lock_until > now`인 레코드가 없으면 락을 획득하고 실행, 있으면 이번 사이클 스킵.
-
-```sql
-CREATE TABLE shedlock (
-    name       VARCHAR(64)  NOT NULL,
-    lock_until TIMESTAMP(3) NOT NULL,
-    locked_at  TIMESTAMP(3) NOT NULL,
-    locked_by  VARCHAR(255) NOT NULL,
-    PRIMARY KEY (name)
-);
-```
-
-`lock_until`은 스케줄러 주기보다 짧게 설정한다 (주기 60초 → lock_until 55초).  
-주기보다 길면 정상 종료 후에도 다음 사이클이 막힌다.
+1. [프로젝트 구조](#1-프로젝트-구조)
+2. [요구사항 해석 및 개선 의견](#2-요구사항-해석-및-개선-의견)
+3. [ERD](#3-erd)
+4. [비동기 처리 구조 및 재시도 정책](#4-비동기-처리-구조-및-재시도-정책)
+5. [테스트 코드](#5-테스트-코드)
+6. [AI 활용 범위](#6-ai-활용-범위)
 
 ---
 
-## 개선 포인트 (미구현)
+## 1. 프로젝트 구조
 
-| 항목 | 현재 | 개선 방향 |
-|------|------|-----------|
-| SKIP LOCKED | `FOR UPDATE`만 적용 (블로킹) | `jakarta.persistence.lock.timeout = -2` 힌트 추가로 `FOR UPDATE SKIP LOCKED` 적용 |
-| 스케줄러 동시 처리 | ShedLock으로 1개 인스턴스만 실행 | SKIP LOCKED 적용 시 여러 인스턴스가 서로 다른 행 병렬 처리 가능 |
-| 즉시 재시도 | 없음 | Resilience4j로 발송 스레드 내 1~2회 즉시 재시도 추가 (DB 상태 변경 없이) |
-| 재시도 브로커 전환 | DB 폴링 방식 | Kafka Delay Topic으로 교체 시 `ChannelSenderPort` 구현체만 교체, 상위 레이어 변경 없음 |
+### 헥사고날 아키텍처란?
+
+헥사고날 아키텍처(Hexagonal Architecture)는 **핵심 비즈니스 로직을 외부 기술(DB, HTTP, 메시지 브로커 등)로부터 완전히 분리**하는 구조입니다.
+
+"알림을 발송한다"는 핵심 로직이 "이메일로 보내느냐, DB에 MySQL을 쓰느냐"를 알 필요가 없도록 설계합니다. 핵심 로직은 인터페이스(Port)만 바라보고, 실제 구현은 어댑터(Adapter)가 담당합니다.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     Adapters (IN)                           │
+│           NotificationController (HTTP API)                 │
+└─────────────────────────┬───────────────────────────────────┘
+                           │
+┌─────────────────────────▼───────────────────────────────────┐
+│                  Application (Core)                         │
+│  RegisterNotificationUseCase  ←→  NotificationRepositoryPort│
+│  GetNotificationUseCase       ←→  ChannelSenderPort         │
+│  NotificationService / DispatchService                      │
+└─────────────────────────┬───────────────────────────────────┘
+                           │
+┌─────────────────────────▼───────────────────────────────────┐
+│                    Adapters (OUT)                           │
+│    NotificationRepositoryImpl (JPA)                         │
+│    LogChannelSenderAdapter (이메일/인앱 Mock 발송)            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 실제 패키지 구조
+
+```
+src/main/java/com/notification/
+├── adapter/
+│   └── in/web/              # HTTP 어댑터 (컨트롤러, DTO, 검증)
+├── application/
+│   ├── port/
+│   │   ├── in/              # UseCase 인터페이스 (입력 포트)
+│   │   └── out/             # Repository/Sender 인터페이스 (출력 포트)
+│   └── service/             # 핵심 비즈니스 로직
+├── domain/                  # 도메인 엔티티 (Notification, DispatchHistory 등)
+└── infrastructure/
+    ├── adapter/out/channel/ # 채널 발송 어댑터 (현재: 로그 출력)
+    ├── repository/          # JPA 구현체
+    └── config/              # Spring 설정 (Swagger, AsyncConfig 등)
+```
+
+### 헥사고날 아키텍처 장단점
+
+**장점**
+
+- **교체가 쉽습니다**: 현재 이메일 발송은 로그 출력(`LogChannelSenderAdapter`)으로 Mock 처리되어 있습니다. 실제 SendGrid API를 연동하려면 `ChannelSenderPort`를 구현한 새 어댑터만 만들면 되고, 핵심 로직 코드는 한 줄도 바꾸지 않아도 됩니다.
+- **테스트하기 쉽습니다**: DB 없이 단위 테스트를 작성할 때 인터페이스(Port)만 Mock으로 대체하면 됩니다.
+- **관심사가 명확히 분리됩니다**: "발송 실패 시 재시도한다"는 비즈니스 규칙이 JPA나 HTTP 코드와 섞이지 않습니다.
+
+**단점**
+
+- **초기 코드량이 많습니다**: Port 인터페이스, Command/Result 객체, 구현체까지 모두 만들어야 해서 간단한 기능도 파일이 여러 개 생깁니다.
+- **익숙하지 않으면 구조 파악이 어렵습니다**: 처음 보는 사람은 컨트롤러 → 서비스 → 리포지토리라는 단순한 흐름보다 진입 장벽이 있습니다.
 
 ---
 
-## 설계 한계 및 개선 방향
+## 2. 요구사항 해석 및 개선 의견
 
-### 현재 구조의 한계
+### 핵심 요구사항 해석
 
-본 시스템은 메시지 브로커 없이 구현되어 다음 한계가 있다:
+**"알림 처리 실패가 비즈니스 트랜잭션에 영향을 주어서는 안 된다"**
 
-> DB 완전 다운 시 알림 API 호출 자체가 실패(503)하며, 알림 서비스 내부에서 해당 요청을 보존할 방법이 없다.
-> `@Retryable`로 일시적 장애는 대응하지만, DB 서버가 장기 다운된 경우 요청 유실 가능성이 존재한다.
+단순히 `try-catch`로 예외를 무시하면 요구사항을 충족하는 것처럼 보이지만, 발송이 실패했을 때 기록도 없고 재시도도 안 됩니다. 이 과제에서는 **Transactional Outbox Pattern**을 적용해서 해결했습니다.
 
-### 마이크로서비스 전환 시 개선 방향
+---
 
-**1. 메시지 브로커 도입 (Kafka)**
+### Transactional Outbox Pattern
+
+**실제 환경의 문제 상황**
+
+실제 서비스라면 결제 완료 후 Kafka 같은 메시지 브로커에 이벤트를 발행하고, 별도 컨슈머가 알림을 발송합니다. 그런데 "DB에 결제 저장"과 "Kafka에 이벤트 발행"은 하나의 트랜잭션으로 묶을 수 없어서 아래 문제가 생깁니다.
 
 ```
-현재: 결제 서비스 → HTTP POST /notifications → 알림 서비스 DB 저장
-전환: 결제 서비스 → Kafka 발행 → 알림 서비스 소비 → DB 저장
+1. DB에 결제 저장 성공
+2. Kafka에 이벤트 발행 실패 → 알림 못 보냄 (사용자는 모름)
+
+또는
+
+1. DB에 결제 저장 실패
+2. Kafka에 이벤트 발행 성공 → 결제는 안 됐는데 알림이 감
 ```
 
-Kafka 메시지는 DB 장애와 무관하게 보존되므로, DB 회복 후 소비하면 유실 없이 처리 가능하다.
+**Outbox Pattern으로 해결**
 
-**2. 전환 비용 최소화 (현재 구조가 이미 준비됨)**
+이벤트 발행 대신 **DB에 "발송 예정 기록(PENDING)"을 저장**하고, 이후 별도 프로세스가 이를 읽어서 발송합니다. DB 저장과 이벤트 발행이 같은 트랜잭션 안에 있으므로 둘 다 성공하거나 둘 다 실패합니다.
 
-- `NotificationEventPublisherPort` → `KafkaNotificationPublisher` 구현체로 교체
-- `ChannelSenderPort` → 실제 이메일/SMS 어댑터로 교체
-- 상위 레이어(Service, Domain) 코드 변경 없음
+**이 과제에서의 적용 코드**
+
+```java
+// NotificationService.register() — 트랜잭션 안에서 저장 + 이벤트 발행
+@Transactional
+public RegisterNotificationResult register(RegisterNotificationCommand command) {
+    // 1. DB에 PENDING 상태로 저장
+    Notification saved = notificationRepositoryPort.save(notification);
+
+    // 2. 트랜잭션 커밋 후에만 이벤트 발행
+    //    커밋 전 서버 재시작 → 알림 레코드도 롤백 → 데이터 유실 없음
+    eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId(), saved.getScheduledAt()));
+    return RegisterNotificationResult.from(saved);
+}
+```
+
+```java
+// NotificationEventHandler — 커밋 완료 후 별도 스레드에서 발송
+@Async("notificationExecutor")
+@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+public void handle(NotificationCreatedEvent event) {
+    // scheduledAt이 미래 시각이면 즉시 발송 생략 → 스케줄러가 예정 시각에 처리
+    if (event.scheduledAt() != null && event.scheduledAt().isAfter(LocalDateTime.now())) {
+        return;
+    }
+    dispatchService.dispatch(event.notificationId());
+}
+```
+
+커밋 후 발송에 실패하더라도 DB에 PENDING 상태로 남아 있으므로 스케줄러가 1분마다 재처리합니다.
+
+실제 Kafka 환경으로 전환하려면 `NotificationEventPublisherPort` 구현체만 교체하면 되고, 핵심 로직은 변경하지 않아도 됩니다.
+
+---
+
+### 멱등성 키 정책
+
+**동일 (이벤트, 수신자, 채널) 조합당 1건만 발송**으로 정의합니다.
+
+멱등성 키 생성 재료: `notificationType | eventId | receiverId | channel`
+
+```java
+// SHA-256 해시로 변환해 DB unique 인덱스에 저장
+String raw = type + "|" + eventId + "|" + receiverId + "|" + channel;
+```
+
+- 같은 결제 이벤트에 EMAIL과 IN_APP을 각각 요청하면 **채널이 다르므로 다른 키** → 두 채널 모두 발송됩니다. 이는 의도된 동작입니다.
+- `channelTarget`(이메일 주소)이나 `contentData`(내용)가 달라도 위 4가지가 같으면 **동일 이벤트로 처리**되어 첫 번째 요청 데이터로 발송됩니다. 이메일 주소나 내용을 바꾸고 싶다면 새 `eventId`를 사용해야 합니다(호출자 책임).
+
+---
+
+### 외부 채널 멱등성 한계
+
+`send()`는 DB 트랜잭션 바깥에 있어서 "외부에 메일이 도달했는데 DB 커밋이 실패"하는 상황이 생기면 재시도 시 메일이 두 번 발송될 수 있습니다.
+
+SendGrid, AWS SES 같은 실제 SaaS 이메일 API는 **멱등성 키 헤더**를 지원합니다. 운영 환경에서는 `send()` 호출 시 `notification.getIdempotencyKey()`를 외부 API 헤더에 함께 전달하면 외부 시스템이 중복을 거릅니다. **현재 `LogChannelSenderAdapter`는 로그 출력만 하므로 부수효과가 없어 이 문제가 실제로 발생하지 않습니다.**
+
+---
+
+### Swagger API 확인 방법
+
+```bash
+# 1. .env 파일 준비 (최초 1회)
+cp .env.example .env
+# .env 파일에 DB 정보 입력 후
+
+# 2. Docker로 실행
+docker-compose up --build -d
+
+# 3. 브라우저에서 접속
+# http://localhost:8080/swagger-ui.html
+```
+
+모든 API는 **`X-User-Id` 헤더**가 필수입니다. Swagger UI 상단의 X-User-Id 입력란에 숫자를 넣고 사용하면 됩니다.
+
+> **주의**: `receiverId`와 `X-User-Id`는 같은 값을 사용해야 합니다. 이 시스템은 자신이 받을 알림을 본인이 등록하는 구조입니다(발신자 = 수신자). 등록한 알림을 조회할 때도 같은 `X-User-Id`를 사용합니다.
+
+---
+
+## 3. ERD
+
+> 아래는 실제 테이블 구조입니다. ERD 이미지는 별도 첨부를 참고합니다.
+
+### notification (알림 원장)
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | BIGINT PK | 알림 ID |
+| receiver_id | BIGINT | 수신자 ID |
+| notification_type | VARCHAR | 알림 유형 (PAYMENT_CONFIRMED 등) |
+| channel | VARCHAR | 발송 채널 (EMAIL / IN_APP) |
+| channel_target | VARCHAR | 이메일 주소 (IN_APP이면 NULL) |
+| status | VARCHAR | 현재 상태 |
+| idempotency_key | VARCHAR UNIQUE | 중복 방지 키 (SHA-256) |
+| retry_count | INT | 재시도 횟수 (최대 3) |
+| next_retry_at | DATETIME | 다음 재시도 예정 시각 |
+| failure_reason | VARCHAR | 최종 실패 사유 코드 |
+| is_read | BOOLEAN | 읽음 여부 (IN_APP 전용) |
+| scheduled_at | DATETIME | 예약 발송 시각 (NULL이면 즉시) |
+| created_at | DATETIME | 생성 시각 |
+| updated_at | DATETIME | 마지막 수정 시각 |
+
+### notification_log (상태 변경 이력)
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | BIGINT PK | 로그 ID |
+| notification_id | BIGINT FK | 알림 ID |
+| from_status | VARCHAR | 이전 상태 |
+| to_status | VARCHAR | 이후 상태 |
+| reason | VARCHAR | 변경 사유 |
+| created_at | DATETIME | 기록 시각 |
+
+### dispatch_history (발송 시도 이력)
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| id | BIGINT PK | 이력 ID |
+| notification_id | BIGINT FK | 알림 ID |
+| attempt_number | INT | 시도 회차 |
+| status | VARCHAR | 성공/실패 |
+| failure_code | VARCHAR | 실패 코드 (성공이면 NULL) |
+| dispatched_at | DATETIME | 시도 시각 |
+
+### shedlock (분산 스케줄러 락)
+
+| 컬럼 | 타입 | 설명 |
+|------|------|------|
+| name | VARCHAR PK | 락 이름 |
+| lock_until | TIMESTAMP | 락 만료 시각 |
+| locked_at | TIMESTAMP | 락 획득 시각 |
+| locked_by | VARCHAR | 락 보유 인스턴스 |
+
+### 알림 상태 전이
+
+```
+PENDING
+  │
+  ▼ 이벤트 핸들러 또는 스케줄러가 픽업
+PROCESSING
+  │
+  ├─ 발송 성공 ──────────────────────────→ SENT
+  │
+  ├─ 일시 장애 (RetryableException), 재시도 횟수 < 3 → RETRYING
+  │
+  ├─ 일시 장애, 재시도 횟수 = 3 ─────────→ FAILED
+  │
+  └─ 영구 장애 (NonRetryableException) ──→ FAILED
+```
+
+---
+
+## 4. 비동기 처리 구조 및 재시도 정책
+
+### 전체 코드 흐름
+
+```
+클라이언트  POST /api/v1/notifications
+                │
+                ▼
+    NotificationController.register()
+                │
+                ▼
+    NotificationService.register()
+                │
+                ├─ 1. 멱등성 키 조회 → 이미 있으면 기존 결과 반환
+                │
+                ├─ 2. Notification 저장 (status=PENDING)
+                │      └─ 동시 중복 시 DataIntegrityViolationException
+                │         → 기존 레코드 조회 후 반환 (200 OK)
+                │
+                ├─ 3. NotificationLog 기록 (CREATED)
+                │
+                └─ 4. NotificationCreatedEvent 발행
+                            │
+                            │ [트랜잭션 커밋 완료 후]
+                            │ @TransactionalEventListener(AFTER_COMMIT)
+                            │ @Async("notificationExecutor") — 별도 스레드
+                            ▼
+                NotificationEventHandler.handle()
+                            │
+                            ├─ scheduledAt이 미래 → 생략, 스케줄러 위임
+                            │
+                            ▼
+                NotificationDispatchService.dispatch()
+                            │
+                            ├─ CAS tryStartProcessing()
+                            │   PENDING/RETRYING → PROCESSING (원자적)
+                            │   다른 스레드가 선점했으면 → 스킵
+                            │
+                            ├─ channelSenderPort.send()
+                            │
+                            ├─ 성공 → SENT
+                            ├─ RetryableException → RETRYING + 지수 백오프
+                            └─ NonRetryableException → FAILED
+
+[1분마다] retryScheduler
+    └─ PENDING/RETRYING 중 nextRetryAt <= now 조회 (SKIP LOCKED)
+       → dispatch() 재처리
+
+[5분마다] stuckRecoveryScheduler
+    └─ 10분 이상 PROCESSING인 알림 조회
+       → CAS UPDATE (status='PROCESSING' AND updated_at <= threshold)
+       → PENDING 복구 → 다음 스케줄러 사이클에서 재처리
+```
+
+### 재시도 정책 (지수 백오프)
+
+| 재시도 회차 | 다음 시도까지 대기 |
+|------------|-----------------|
+| 1회 실패 후 | 1분 후 |
+| 2회 실패 후 | 5분 후 |
+| 3회 실패 후 | **최종 FAILED** |
+
+- **RetryableException**: 네트워크 오류, 서버 일시 장애 등 → 다음 사이클에 재시도합니다.
+- **NonRetryableException**: 이메일 주소 없음 등 논리적 오류 → 즉시 FAILED 처리합니다.
+
+### 다중 인스턴스 중복 방지
+
+| 방어 단계 | 메커니즘 |
+|-----------|---------|
+| 조회 단계 | SKIP LOCKED — 다른 인스턴스가 잠금 획득한 행 건너뜀 |
+| 처리 시작 | CAS UPDATE (`WHERE status IN ('PENDING','RETRYING')`) — 1개 인스턴스만 PROCESSING 전환 성공 |
+| Stuck 복구 | CAS UPDATE (`WHERE status='PROCESSING' AND updated_at <= threshold`) — 이미 SENT된 행은 0행 업데이트로 안전 스킵 |
+| 스케줄러 실행 | ShedLock — 다중 인스턴스 중 1개에서만 스케줄러 실행 |
+
+### 최종 실패(FAILED) 시 운영 정책
+
+현재 FAILED 상태가 되면 스케줄러가 다시 픽업하지 않습니다. 운영 환경에서는 아래 정책을 권장합니다.
+
+1. **모니터링 연동**: FAILED 알림 발생 시 운영팀 슬랙/이메일로 즉시 통보합니다.
+2. **수동 재시도 API**: 운영자가 FAILED 알림을 선택해 PENDING으로 되돌리는 어드민 API를 제공합니다.
+3. **재시도 횟수 초기화 기준**:
+   - 외부 채널 장애 복구 후 재시도라면 → `retry_count` 초기화 O (장애가 해소됐으므로)
+   - 동일 오류가 반복될 것으로 판단되면 → `retry_count` 초기화 X (불필요한 재시도 방지)
+
+---
+
+## 5. 테스트 코드
+
+### 테스트 환경 준비
+
+**Docker Desktop이 실행 중이어야 합니다.** 통합 테스트는 Testcontainers가 MySQL 8.0 컨테이너를 자동으로 띄웁니다.
+
+```bash
+# 전체 테스트 실행
+./gradlew test
+
+# 테스트 종류별 실행
+./gradlew test --tests "com.notification.domain.*"           # 도메인 단위 테스트
+./gradlew test --tests "com.notification.application.*"      # 서비스 단위 테스트
+./gradlew test --tests "com.notification.resilience.*"       # 장애·복구 통합 테스트
+./gradlew test --tests "com.notification.concurrency.*"      # 동시성 통합 테스트
+```
+
+### 로컬 서버 실행
+
+```bash
+# 1. 환경변수 파일 준비 (최초 1회)
+cp .env.example .env
+```
+
+`.env` 파일을 열어 아래 내용을 채웁니다:
+
+```
+DB_URL=jdbc:mysql://mysql:3306/notification_db?serverTimezone=UTC&characterEncoding=UTF-8
+DB_USERNAME=notification
+DB_PASSWORD=notification123
+MYSQL_ROOT_PASSWORD=root123
+MYSQL_DATABASE=notification_db
+```
+
+```bash
+# 2. Docker로 앱 + MySQL 함께 실행
+docker-compose up --build -d
+
+# 3. Swagger UI 접속
+# http://localhost:8080/swagger-ui.html
+```
+
+### 테스트 구성
+
+#### 도메인 단위 테스트 (`NotificationTest`)
+
+비즈니스 규칙을 검증합니다. DB나 Spring 없이 순수 Java 객체로 실행되어 가장 빠릅니다.
+
+| 테스트 | 검증 내용 |
+|--------|---------|
+| 초기 상태 | 알림 생성 시 status=PENDING, retryCount=0 |
+| 재시도 정책 | 1회 실패 → RETRYING + 1분 후 재시도, 3회 실패 → FAILED |
+| 지수 백오프 | 1회: 1분, 2회: 5분 대기 확인 |
+| NonRetryable | 즉시 FAILED, retryCount 증가 없음 |
+
+#### 서비스 단위 테스트
+
+Mock으로 DB 의존성을 제거하고 서비스 로직만 검증합니다.
+
+| 테스트 파일 | 주요 검증 |
+|------------|---------|
+| `NotificationServiceTest` | 신규 등록 시 save/publish 1회, 중복 요청 시 기존 결과 반환 |
+| `NotificationDispatchServiceTest` | 발송 성공/실패/재시도 각 경로의 상태 전이 및 이력 기록 |
+| `GetNotificationServiceTest` | 본인 알림 조회 성공, 타인 알림 접근 시 404 |
+
+#### 장애·복구 통합 테스트 (`ResilienceIntegrationTest`)
+
+실제 MySQL 컨테이너를 사용하는 E2E 시나리오 테스트입니다.
+
+| 시나리오 | 내용 |
+|---------|------|
+| **A. 서버 재시작** | PENDING으로만 저장하고 이벤트 발행 없이 → 스케줄러만으로 발송 완료 확인 |
+| **B. Stuck 복구** | DB에서 직접 `updated_at`을 20분 전으로 변경 → `recoverStuck()` 호출 → PENDING 복구 → 재발송 → SENT |
+| **C. 재시도** | 1회 일시 실패 → RETRYING → `next_retry_at` 과거로 조작 → 재발송 → SENT, DispatchHistory 2건 |
+| **D. NonRetryable** | 영구 실패 채널 오류 → 즉시 FAILED, retryCount=0, 스케줄러 재처리 대상 아님 |
+| **E. 최대 재시도** | 3회 연속 실패 → FAILED, DispatchHistory 3건, 이후 스케줄러 픽업 안 됨 |
+
+> **테스트 전략**: ShedLock 최소 점유 시간(10초) 간섭을 피하기 위해 스케줄러 메서드를 직접 호출하지 않고 `dispatchService.fetchPendingIds()` + `dispatch()`를 직접 조합합니다. `@PreUpdate` 콜백이 `updated_at`을 자동 갱신하므로 시간 조작이 필요한 시나리오는 `JdbcTemplate`으로 DB를 직접 수정합니다.
+
+#### 동시성 통합 테스트 (`ConcurrencyIntegrationTest`)
+
+멀티 스레드 환경에서 중복 방지 메커니즘을 검증합니다.
+
+| 테스트 | 시나리오 |
+|--------|---------|
+| **동시 중복 register** | 10개 스레드가 동시에 동일 키로 register → DB에 1건만 저장, 나머지는 기존 결과 반환 |
+| **동시 dispatch** | 같은 알림을 여러 스레드가 동시에 dispatch → 1개만 PROCESSING 전환, 나머지 스킵 |
+| **다중 인스턴스 스케줄러** | 5개 스레드가 동시에 fetchPendingIds → ID 중복 없음 |
+
+---
+
+## 6. AI 활용 범위
+
+이 프로젝트는 AI(Claude)를 적극적으로 활용하되, **모든 코드와 설계를 직접 이해하고 검증**했습니다.
+
+### 활용 내역
+
+| 영역 | 활용 방식 |
+|------|---------|
+| **초기 설계 검토** | 헥사고날 구조, 상태 전이, 재시도 정책 설계 방향 질의 및 피드백 |
+| **코드 구현** | 멱등성 키 생성 로직, CAS 쿼리, SKIP LOCKED 쿼리, 지수 백오프 로직 초안 작성 |
+| **버그 발견 및 수정** | `scheduledAt` 미래 발송 즉시 트리거 버그, `recoverStuck` 비-CAS 경합 문제, `DataIntegrityViolationException` catch 위치 문제 등 엣지 케이스 분석 |
+| **테스트 코드** | 시나리오별 통합 테스트 초안 작성 및 `@PreUpdate` 우회를 위한 JdbcTemplate 전략 제안 |
+| **리팩토링** | `recordFailure()` 메서드 추출, 검증 로직(`@ValidChannelTarget`) 분리, 예외 핸들러 구조 개선 |
+| **보안 개선** | 이메일 PII 마스킹, DB 자격 증명 하드코딩 제거, X-User-Id 헤더 유효성 검증 추가 |
+| **문서화** | Javadoc, README, 커밋 메시지 작성 보조 |
+
+### 검증 방식
+
+- AI가 제안한 코드는 반드시 로컬에서 실행해 동작을 확인했습니다.
+- 엣지 케이스 분석 결과는 실제 테스트 코드로 재현하거나 코드 리뷰를 통해 사실 여부를 검증했습니다.
+- 설계 방향(멱등성 키 재료 선정, 재시도 횟수 3회 등)은 AI 제안을 참고하되 요구사항에 맞게 직접 판단했습니다.
+- **AI가 제안했더라도 왜 그렇게 해야 하는지 설명하지 못하면 채택하지 않았습니다.**
