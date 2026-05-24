@@ -397,15 +397,7 @@ PROCESSING
 cp .env.example .env
 ```
 
-`.env` 파일을 열어 아래 내용을 채웁니다:
-
-```
-DB_URL=jdbc:mysql://mysql:3306/notification_db?serverTimezone=UTC&characterEncoding=UTF-8
-DB_USERNAME=notification
-DB_PASSWORD=notification123
-MYSQL_ROOT_PASSWORD=root123
-MYSQL_DATABASE=notification_db
-```
+`.env.example`을 참고해 `.env` 파일에 DB 접속 정보를 채웁니다.
 
 ```bash
 # 2. Docker로 앱 + MySQL 함께 실행
