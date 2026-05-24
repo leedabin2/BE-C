@@ -1,8 +1,8 @@
 spring:
   datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/notification_db?serverTimezone=UTC&characterEncoding=UTF-8}
+    username: ${DB_USERNAME:notification}
+    password: ${DB_PASSWORD:notification}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   sql:
@@ -16,8 +16,8 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
-        format_sql: true
-    show-sql: true
+        # format_sql: true
+    # show-sql: true
     open-in-view: false
 
   task:
@@ -46,5 +46,4 @@ notification:
 
 logging:
   level:
-    com.notification: DEBUG
-    org.hibernate.SQL: DEBUG
+    # com.notification: DEBUG
