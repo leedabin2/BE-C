@@ -23,6 +23,14 @@ public class UserIdArgumentResolver implements HandlerMethodArgumentResolver {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("X-User-Id 헤더가 필요합니다.");
         }
-        return Long.parseLong(value);
+        try {
+            long userId = Long.parseLong(value.trim());
+            if (userId <= 0) {
+                throw new IllegalArgumentException("X-User-Id는 1 이상의 양수여야 합니다.");
+            }
+            return userId;
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("X-User-Id 헤더 형식이 올바르지 않습니다: " + value);
+        }
     }
 }

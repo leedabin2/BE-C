@@ -1,4 +1,7 @@
 spring:
+  sql:
+    init:
+      mode: never   # create-drop이 테이블 관리, schema.sql(shedlock·FK) 불필요
   jpa:
     hibernate:
       ddl-auto: create-drop

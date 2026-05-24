@@ -5,7 +5,6 @@ import com.notification.common.exception.NotificationException;
 import com.notification.common.response.ApiResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -36,6 +35,14 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.error(errorCode, e.getMessage()));
     }
 
+    /** X-User-Id 헤더 형식 오류 및 도메인 규칙 위반 처리. */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgumentException(IllegalArgumentException e) {
+        log.warn("잘못된 요청: {}", e.getMessage());
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.error(ErrorCode.INVALID_INPUT, e.getMessage()));
+    }
+
     /** {@code @Valid} 유효성 검사 실패 처리. 모든 필드 오류 메시지를 합쳐서 반환한다. */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResponse<Void>> handleValidationException(MethodArgumentNotValidException e) {
@@ -45,17 +52,6 @@ public class GlobalExceptionHandler {
         log.warn("Validation failed: {}", detail);
         return ResponseEntity.badRequest()
                 .body(ApiResponse.error(ErrorCode.INVALID_INPUT, detail));
-    }
-
-    /**
-     * 동시 중복 등록 경합 처리.
-     * check-then-act 사이에 동시 요청이 성공한 경우 DB unique constraint가 잡아낸다.
-     * 이미 같은 요청이 처리됐으므로 호출자에게 성공으로 응답한다.
-     */
-    @ExceptionHandler(DataIntegrityViolationException.class)
-    public ResponseEntity<ApiResponse<Void>> handleDataIntegrityViolationException(DataIntegrityViolationException e) {
-        log.warn("동시 중복 등록 감지 (unique constraint). 성공으로 처리", e);
-        return ResponseEntity.ok(ApiResponse.success(null));
     }
 
     /**

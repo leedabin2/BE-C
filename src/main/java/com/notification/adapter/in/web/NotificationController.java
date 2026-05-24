@@ -18,6 +18,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -25,6 +27,7 @@ import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+@Slf4j
 @Tag(name = "Notification", description = "알림 API")
 @RestController
 @RequestMapping("/api/v1/notifications")
@@ -58,8 +61,16 @@ public class NotificationController {
                 request.scheduledAt()
         );
 
-        RegisterNotificationResult result = registerNotificationUseCase.register(command);
-        return ResponseEntity.ok(ApiResponse.success(NotificationResponse.from(result)));
+        try {
+            RegisterNotificationResult result = registerNotificationUseCase.register(command);
+            return ResponseEntity.ok(ApiResponse.success(NotificationResponse.from(result)));
+        } catch (DataIntegrityViolationException e) {
+            // check-then-insert 경합: 다른 스레드가 동일 idempotency key로 먼저 저장 완료
+            // 롤백된 트랜잭션과 별도로 기존 알림을 조회해 정상 응답 반환
+            log.warn("동시 중복 등록 감지. 기존 알림 반환.");
+            RegisterNotificationResult existing = registerNotificationUseCase.findExistingByCommand(command);
+            return ResponseEntity.ok(ApiResponse.success(NotificationResponse.from(existing)));
+        }
     }
 
     @Operation(summary = "알림 상태 조회", description = "알림 ID로 단건 알림의 상태를 조회합니다. 본인 알림만 조회 가능합니다.")
