@@ -142,8 +142,6 @@ public void handle(NotificationCreatedEvent event) {
 
 > **구현 범위 참고**: 이 과제에서 `eventPublisherPort`는 Spring의 `ApplicationEventPublisher`를 감싼 JVM 내부 이벤트입니다. Kafka 같은 외부 브로커를 쓰는 완전한 Outbox Pattern과는 차이가 있습니다. Kafka 전환 시에는 DB 저장과 브로커 발행의 원자성이 다시 깨지므로, 그 시점에 Debezium(CDC) 방식으로 전환하는 것이 맞다고 생각합니다. 다만 이 과제 범위에서는 `NotificationEventPublisherPort` 인터페이스로 분리해 두었기 때문에 핵심 로직 변경 없이 구현체 교체만으로 전환 가능하도록 설계했습니다.
 
-실제 Kafka 환경으로 전환하려면 `NotificationEventPublisherPort` 구현체만 교체하면 되고, 핵심 로직은 변경하지 않아도 됩니다.
-
 **스케줄러가 필요한 이유**
 
 `@TransactionalEventListener(AFTER_COMMIT)` + `@Async`로 커밋 직후 발송을 시도하지만,이벤트 핸들러 실행 중 서버가 비정상 종료되거나 스레드 풀이 포화 상태이면 발송이 누락됩니다. 이 경우 PENDING 상태로 남은 레코드를 스케줄러가 주기적으로 폴링해 재처리합니다.
@@ -258,7 +256,7 @@ docker-compose up --build -d
 | notification_id | BIGINT FK | 알림 ID |
 | attempt_number | INT | 시도 회차 |
 | status | VARCHAR | 성공/실패 |
-| failure_code | VARCHAR | 실패 코드 (성공이면 NULL) |
+| error_message | VARCHAR | 실패 코드 (성공이면 NULL) |
 | dispatched_at | DATETIME | 시도 시각 |
 
 ### shedlock (분산 스케줄러 락)
@@ -346,10 +344,10 @@ PROCESSING
 [5분마다] stuckRecoveryScheduler
     └─ 10분 이상 PROCESSING인 알림 조회
        → 조건부 UPDATE (status='PROCESSING' AND updated_at <= threshold)
-       → PENDING 복구 (retry_count 유지) → 다음 스케줄러 사이클에서 재처리
-       ※ retry_count를 초기화하지 않는 이유: stuck은 발송 시도 자체가
-         완료되지 않은 상태이므로 횟수를 그대로 유지하는 것이 맞다고 판단함.
-         운영자가 판단해 수동으로 초기화하는 경우는 FAILED 이후 어드민 API로 처리
+       → PENDING 복구 (retry_count = 0 초기화) → 다음 스케줄러 사이클에서 재처리
+       ※ retry_count를 초기화하는 이유: stuck은 발송 시도 자체가 완료되지
+         않은 상태(외부로 실제 요청이 나갔는지조차 불확실)이므로 처음부터
+         다시 시도하는 것이 맞다고 판단함.
 ```
 
 ### 재시도 정책 (지수 백오프)
@@ -390,9 +388,9 @@ PROCESSING
 | Stuck 복구 | 조건부 UPDATE (`WHERE status='PROCESSING' AND updated_at <= threshold`) — 이미 SENT된 행은 0행 업데이트로 안전 스킵 |
 | 스케줄러 실행 | ShedLock — 다중 인스턴스 중 1개에서만 스케줄러 실행 |
 
-> **ShedLock 한계**: 스케줄러를 실행 중이던 서버가 갑자기 꺼지면, 다음 서버가 스케줄러를 이어받을 때까지 최대 `lock_until` 시간만큼 기다려야 합니다. 이 공백을 줄이려면 `lock_until`을 스케줄 주기보다 조금만 길게(예: 1분 주기라면 70초 정도) 설정하는 것이 좋다고 생각합니다.
+> **ShedLock 한계**: 스케줄러를 실행 중이던 서버가 갑자기 꺼지면, 다음 서버가 스케줄러를 이어받을 때까지 최대 `lockAtMostFor` 시간만큼 기다려야 합니다. 이 공백을 줄이려면 `lockAtMostFor`을 스케줄 주기보다 살짝 짧게 설정하는 것이 좋습니다. 예를 들어 이 코드에서는 60초 주기에 `lockAtMostFor = 55s`로 설정해, 서버가 죽어도 55초 후 다른 인스턴스가 바로 이어받을 수 있도록 했습니다.
 
-> **발송 스레드가 꽉 찼을 때**: 비동기 발송을 처리하는 스레드 풀이 가득 차면 새 작업이 거부될 수 있습니다. 이때 발송은 누락되지만 DB에 PENDING 상태로 남아 있어 1분 뒤 스케줄러가 다시 처리합니다. 다만 이 거부 상황이 로그에 안 남으면 나중에 원인 파악이 어려울 수 있어, 거부 시 로그를 남기는 처리를 추가하면 좋을 것 같습니다.
+> **발송 스레드가 꽉 찼을 때**: 비동기 발송을 처리하는 스레드 풀이 가득 차면 새 작업이 거부됩니다. 이때 Spring의 기본 동작으로 `RejectedExecutionException`이 발생하고, Spring의 `AsyncUncaughtExceptionHandler`가 이를 잡아서 로그로 남긴 뒤 종료합니다. 발송은 누락되지만 DB에 PENDING 상태로 남아 있어 1분 뒤 스케줄러가 다시 처리합니다.
 
 ### 최종 실패(FAILED) 시 처리
 
