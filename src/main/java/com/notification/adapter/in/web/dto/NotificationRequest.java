@@ -16,7 +16,7 @@ import java.time.LocalDateTime;
 @ValidChannelTarget
 public record NotificationRequest(
 
-        @Schema(description = "수신자 ID (1 이상)", example = "42")
+        @Schema(description = "수신자 ID (1 이상)", example = "1")
         @NotNull
         @Min(value = 1, message = "receiverId는 1 이상이어야 합니다.")
         Long receiverId,
