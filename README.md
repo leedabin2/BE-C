@@ -360,8 +360,24 @@ PROCESSING
 | 2회 실패 후 | 5분 후 |
 | 3회 실패 후 | **최종 FAILED** |
 
-- **RetryableException**: 네트워크 오류, 서버 일시 장애 등 → 다음 사이클에 재시도합니다.
-- **NonRetryableException**: 이메일 주소 없음 등 논리적 오류 → 즉시 FAILED 처리합니다.
+**재시도하는 경우 (RetryableException)**
+
+잠시 후 다시 시도하면 성공할 가능성이 있는 일시적인 문제입니다.
+
+| 실패 코드 | 상황 |
+|----------|------|
+| `CHANNEL_UNAVAILABLE` | 네트워크 오류, 외부 이메일 서비스가 일시적으로 5xx 응답 |
+| `CHANNEL_RATE_LIMITED` | 외부 서비스가 요청이 너무 많다고 429 응답 (잠시 후 재시도하면 됨) |
+
+**재시도하지 않는 경우 (NonRetryableException)**
+
+몇 번을 다시 시도해도 같은 결과가 나올 것이 확실한 오류입니다. 바로 FAILED로 처리합니다.
+
+| 실패 코드 | 상황 |
+|----------|------|
+| `CHANNEL_INVALID_TARGET` | 수신자 이메일 주소가 잘못된 형식이거나 존재하지 않는 경우 |
+| `CHANNEL_AUTH_FAILED` | 외부 API 키가 만료되거나 잘못된 경우 |
+| `CHANNEL_INVALID_REQUEST` | 요청 파라미터 자체가 잘못된 경우 (4xx 응답) |
 
 ### 다중 인스턴스 중복 방지
 
