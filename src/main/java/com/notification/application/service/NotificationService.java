@@ -82,6 +82,22 @@ public class NotificationService implements RegisterNotificationUseCase {
     }
 
     /**
+     * 동시 중복 등록 경합 발생 후 기존 알림을 조회한다.
+     *
+     * DataIntegrityViolationException 이후 별도 트랜잭션에서 호출돼
+     * 롤백된 트랜잭션의 영향 없이 기존 레코드를 읽는다.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public RegisterNotificationResult findExistingByCommand(RegisterNotificationCommand command) {
+        String idempotencyKey = buildIdempotencyKey(command);
+        return notificationRepositoryPort.findByIdempotencyKey(idempotencyKey)
+                .map(RegisterNotificationResult::from)
+                .orElseThrow(() -> new IllegalStateException(
+                        "경합 후 기존 알림 조회 실패. idempotencyKey=" + idempotencyKey));
+    }
+
+    /**
      * SHA-256 기반 멱등성 키를 생성한다.
      *
      * 키 재료: {@code notificationType|eventId|receiverId|channel}

@@ -31,10 +31,17 @@ public class LogChannelSenderAdapter implements ChannelSenderPort {
             throw new NonRetryableChannelException(ChannelFailureCode.CHANNEL_INVALID_TARGET);
         }
         log.info("[EMAIL 발송] to={}, type={}, referenceId={}, referenceType={}",
-                notification.getChannelTarget(),
+                maskEmail(notification.getChannelTarget()),
                 notification.getNotificationType(),
                 notification.getReferenceId(),
                 notification.getReferenceType());
+    }
+
+    /** 이메일 주소 PII 마스킹. user@example.com → u***@example.com */
+    private String maskEmail(String email) {
+        int atIndex = email.indexOf('@');
+        if (atIndex <= 1) return "***@" + (atIndex >= 0 ? email.substring(atIndex + 1) : email);
+        return email.charAt(0) + "***" + email.substring(atIndex);
     }
 
     private void sendInApp(Notification notification) {

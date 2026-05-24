@@ -91,34 +91,28 @@ public class NotificationDispatchService {
 
         } catch (RetryableChannelException e) {
             notification.markRetrying(e.getFailureCode().name());
-            dispatchHistoryRepositoryPort.save(
-                    DispatchHistory.failure(notificationId, attemptNumber, e.getFailureCode().name()));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING,
-                            notification.getStatus(), e.getFailureCode().name()));
+            recordFailure(notificationId, attemptNumber, e.getFailureCode().name(), notification.getStatus());
             log.warn("재시도 가능 발송 실패. id={}, code={}, retryCount={}",
                     notificationId, e.getFailureCode(), notification.getRetryCount());
 
         } catch (NonRetryableChannelException e) {
             notification.markFailed(e.getFailureCode().name());
-            dispatchHistoryRepositoryPort.save(
-                    DispatchHistory.failure(notificationId, attemptNumber, e.getFailureCode().name()));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING,
-                            NotificationStatus.FAILED, e.getFailureCode().name()));
+            recordFailure(notificationId, attemptNumber, e.getFailureCode().name(), NotificationStatus.FAILED);
             log.error("재시도 불가 발송 실패. id={}, code={}", notificationId, e.getFailureCode());
 
         } catch (Exception e) {
             notification.markRetrying(ChannelFailureCode.CHANNEL_UNAVAILABLE.name());
-            dispatchHistoryRepositoryPort.save(
-                    DispatchHistory.failure(notificationId, attemptNumber, ChannelFailureCode.CHANNEL_UNAVAILABLE.name()));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING,
-                            notification.getStatus(), ChannelFailureCode.CHANNEL_UNAVAILABLE.name()));
+            recordFailure(notificationId, attemptNumber, ChannelFailureCode.CHANNEL_UNAVAILABLE.name(), notification.getStatus());
             log.error("예상치 못한 발송 오류. id={}", notificationId, e);
 
         } finally {
             notificationRepositoryPort.save(notification);
         }
+    }
+
+    private void recordFailure(Long notificationId, int attemptNumber, String failureCode, NotificationStatus toStatus) {
+        dispatchHistoryRepositoryPort.save(DispatchHistory.failure(notificationId, attemptNumber, failureCode));
+        notificationLogRepositoryPort.save(
+                NotificationLog.of(notificationId, NotificationStatus.PROCESSING, toStatus, failureCode));
     }
 }
