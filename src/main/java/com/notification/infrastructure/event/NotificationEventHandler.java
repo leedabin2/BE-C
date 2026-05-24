@@ -9,6 +9,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.time.LocalDateTime;
+
 /**
  * 알림 생성 이벤트를 수신해 발송을 트리거하는 핸들러.
  *
@@ -40,6 +42,11 @@ public class NotificationEventHandler {
     @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handle(NotificationCreatedEvent event) {
+        if (event.scheduledAt() != null && event.scheduledAt().isAfter(LocalDateTime.now())) {
+            log.debug("예약 발송 알림 - 즉시 발송 생략, 스케줄러에 위임. id={}, scheduledAt={}",
+                    event.notificationId(), event.scheduledAt());
+            return;
+        }
         log.debug("알림 발송 이벤트 수신. id={}", event.notificationId());
         dispatchService.dispatch(event.notificationId());
     }

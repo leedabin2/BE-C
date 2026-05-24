@@ -76,7 +76,7 @@ public class NotificationService implements RegisterNotificationUseCase {
         notificationLogRepositoryPort.save(
                 NotificationLog.of(saved.getId(), null, NotificationStatus.PENDING, "CREATED"));
 
-        eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId()));
+        eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId(), saved.getScheduledAt()));
 
         return RegisterNotificationResult.from(saved);
     }
