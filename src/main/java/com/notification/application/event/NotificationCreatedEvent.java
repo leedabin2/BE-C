@@ -1,3 +1,5 @@
 package com.notification.application.event;
 
-public record NotificationCreatedEvent(Long notificationId) {}
+import java.time.LocalDateTime;
+
+public record NotificationCreatedEvent(Long notificationId, LocalDateTime scheduledAt) {}
