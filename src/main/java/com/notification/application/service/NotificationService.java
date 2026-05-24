@@ -83,7 +83,7 @@ public class NotificationService implements RegisterNotificationUseCase {
 
         Notification saved;
         try {
-            saved = notificationRepositoryPort.save(notification);
+            saved = notificationRepositoryPort.saveAndFlush(notification);
         } catch (DataIntegrityViolationException e) {
             log.warn("동시 중복 등록 감지. 기존 알림 반환. idempotencyKey={}", idempotencyKey);
             return self.findExistingByCommand(command);

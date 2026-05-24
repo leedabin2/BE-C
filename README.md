@@ -140,6 +140,8 @@ public void handle(NotificationCreatedEvent event) {
 
 커밋 후 발송에 실패하더라도 DB에 PENDING 상태로 남아 있으므로 스케줄러가 1분마다 재처리합니다.
 
+> **구현 범위 참고**: 이 과제에서 `eventPublisherPort`는 Spring의 `ApplicationEventPublisher`를 감싼 JVM 내부 이벤트입니다. Kafka 같은 외부 브로커를 쓰는 완전한 Outbox Pattern과는 차이가 있습니다. Kafka 전환 시에는 DB 저장과 브로커 발행의 원자성이 다시 깨지므로, 그 시점에 Debezium(CDC) 방식으로 전환하는 것이 맞다고 생각합니다. 다만 이 과제 범위에서는 `NotificationEventPublisherPort` 인터페이스로 분리해 두었기 때문에 핵심 로직 변경 없이 구현체 교체만으로 전환 가능하도록 설계했습니다.
+
 실제 Kafka 환경으로 전환하려면 `NotificationEventPublisherPort` 구현체만 교체하면 되고, 핵심 로직은 변경하지 않아도 됩니다.
 
 **스케줄러가 필요한 이유**
@@ -170,7 +172,9 @@ String raw = type + "|" + eventId + "|" + receiverId + "|" + channel;
 ```
 
 - 같은 결제 이벤트에 EMAIL과 IN_APP을 각각 요청하면 **채널이 다르므로 다른 키** → 두 채널 모두 발송됩니다. 이는 의도된 동작입니다.
-- `channelTarget`(이메일 주소)이나 `contentData`(내용)가 달라도 위 4가지가 같으면 **동일 이벤트로 처리**되어 첫 번째 요청 데이터로 발송됩니다. 이메일 주소나 내용을 바꾸고 싶다면 새 `eventId`를 사용해야 합니다(호출자 책임).
+- `channelTarget`(이메일 주소)이나 `contentData`(내용)가 달라도 위 4가지가 같으면 **동일 이벤트로 처리**되어 첫 번째 요청 데이터로 발송됩니다. 이메일 주소나 내용을 바꾸고 싶다면 새 `eventId`를 사용해야 합니다.
+
+> **호출자 계약**: `eventId`는 호출자(결제 서버 등)가 비즈니스 이벤트 단위로 고유하게 생성해서 넘겨야 합니다. 같은 이벤트에 `eventId`를 다르게 설정하면 중복 발송이 발생하고, 이는 이 시스템이 막을 수 없는 영역입니다. Swagger 요청 예시에 이 계약을 명시해 두었습니다.
 
 ---
 
@@ -302,9 +306,12 @@ PROCESSING
                 │
                 ├─ 1. 멱등성 키 조회 → 이미 있으면 기존 결과 반환
                 │
-                ├─ 2. Notification 저장 (status=PENDING)
+                ├─ 2. Notification saveAndFlush (status=PENDING)
                 │      └─ 동시 중복 시 DataIntegrityViolationException
                 │         → 기존 레코드 조회 후 반환 (200 OK)
+                │         ※ save() 대신 saveAndFlush() 사용 — Hibernate는
+                │           save() 후 flush를 커밋 시점까지 지연하므로
+                │           catch 블록 범위 밖에서 예외가 터질 수 있음
                 │
                 ├─ 3. NotificationLog 기록 (CREATED)
                 │
@@ -321,8 +328,9 @@ PROCESSING
                             ▼
                 NotificationDispatchService.dispatch()
                             │
-                            ├─ CAS tryStartProcessing()
-                            │   PENDING/RETRYING → PROCESSING (원자적)
+                            ├─ 조건부 UPDATE tryStartProcessing()
+                            │   WHERE status IN ('PENDING','RETRYING')
+                            │   → PROCESSING (원자적, 1개 스레드만 성공)
                             │   다른 스레드가 선점했으면 → 스킵
                             │
                             ├─ channelSenderPort.send()
@@ -332,13 +340,18 @@ PROCESSING
                             └─ NonRetryableException → FAILED
 
 [1분마다] retryScheduler
-    └─ PENDING/RETRYING 중 nextRetryAt <= now 조회 (SKIP LOCKED)
-       → dispatch() 재처리
+    └─ PENDING/RETRYING 중
+       scheduledAt IS NULL OR scheduledAt <= now   ← 예약 시각 도래 확인
+       nextRetryAt IS NULL OR nextRetryAt <= now   ← 재시도 대기 완료 확인
+       두 조건 모두 만족하는 행만 SKIP LOCKED로 조회 → dispatch() 재처리
 
 [5분마다] stuckRecoveryScheduler
     └─ 10분 이상 PROCESSING인 알림 조회
-       → CAS UPDATE (status='PROCESSING' AND updated_at <= threshold)
-       → PENDING 복구 → 다음 스케줄러 사이클에서 재처리
+       → 조건부 UPDATE (status='PROCESSING' AND updated_at <= threshold)
+       → PENDING 복구 (retry_count 유지) → 다음 스케줄러 사이클에서 재처리
+       ※ retry_count를 초기화하지 않는 이유: stuck은 발송 시도 자체가
+         완료되지 않은 상태이므로 횟수를 그대로 유지하는 것이 맞다고 판단함.
+         운영자가 판단해 수동으로 초기화하는 경우는 FAILED 이후 어드민 API로 처리
 ```
 
 ### 재시도 정책 (지수 백오프)
@@ -357,9 +370,13 @@ PROCESSING
 | 방어 단계 | 메커니즘 |
 |-----------|---------|
 | 조회 단계 | SKIP LOCKED — 다른 인스턴스가 잠금 획득한 행 건너뜀 |
-| 처리 시작 | CAS UPDATE (`WHERE status IN ('PENDING','RETRYING')`) — 1개 인스턴스만 PROCESSING 전환 성공 |
-| Stuck 복구 | CAS UPDATE (`WHERE status='PROCESSING' AND updated_at <= threshold`) — 이미 SENT된 행은 0행 업데이트로 안전 스킵 |
+| 처리 시작 | 조건부 UPDATE (`WHERE status IN ('PENDING','RETRYING')`) — 1개 인스턴스만 PROCESSING 전환 성공 |
+| Stuck 복구 | 조건부 UPDATE (`WHERE status='PROCESSING' AND updated_at <= threshold`) — 이미 SENT된 행은 0행 업데이트로 안전 스킵 |
 | 스케줄러 실행 | ShedLock — 다중 인스턴스 중 1개에서만 스케줄러 실행 |
+
+> **ShedLock 한계**: 락을 잡은 인스턴스가 실행 도중 비정상 종료되면 `lock_until`이 만료될 때까지 다른 인스턴스가 스케줄러를 실행하지 못합니다. 이 때문에 `lock_until`을 스케줄 주기보다 살짝 길게(예: 1분 주기라면 70초) 설정해서 공백 시간을 최소화하는 것이 좋다고 생각합니다.
+
+> **스레드 풀 포화 시**: `@Async` 실행기의 큐가 꽉 차면 Spring이 `TaskRejectedException`을 던집니다. 트랜잭션은 이미 커밋된 이후라 롤백은 안 되지만, PENDING 레코드가 DB에 남아 있으므로 1분 후 스케줄러가 정상 처리합니다. 다만 이 예외가 로그에 남지 않으면 운영 중 무음 실패가 될 수 있어, 실행기에 `RejectedExecutionHandler`를 등록해 로그를 남기는 것이 좋다고 생각합니다.
 
 ### 최종 실패(FAILED) 시 운영 정책
 

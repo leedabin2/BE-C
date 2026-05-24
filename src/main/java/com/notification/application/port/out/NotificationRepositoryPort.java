@@ -20,6 +20,14 @@ public interface NotificationRepositoryPort {
     /** 알림을 저장하고 저장된 엔티티를 반환한다. */
     Notification save(Notification notification);
 
+    /**
+     * 알림을 저장하고 즉시 flush한다.
+     * Hibernate는 save() 이후 실제 INSERT를 커밋 직전까지 지연할 수 있어,
+     * DataIntegrityViolationException이 catch 범위 바깥(커밋 시점)에서 발생한다.
+     * 중복 키 예외를 save() 직후에 잡아야 하는 경우 이 메서드를 사용한다.
+     */
+    Notification saveAndFlush(Notification notification);
+
     /** ID로 알림을 조회한다. */
     Optional<Notification> findById(Long id);
 

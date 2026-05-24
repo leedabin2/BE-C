@@ -24,6 +24,11 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     }
 
     @Override
+    public Notification saveAndFlush(Notification notification) {
+        return jpaRepository.saveAndFlush(notification);
+    }
+
+    @Override
     public Optional<Notification> findById(Long id) {
         return jpaRepository.findById(id);
     }
