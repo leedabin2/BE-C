@@ -1,4 +1,5 @@
 package com.notification.domain;
+// PRD: F2-3 → docs/prd/F2.md
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;

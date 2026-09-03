@@ -1,4 +1,5 @@
 package com.notification.adapter.in.web.dto;
+// PRD: F1-1 → docs/prd/F1.md
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.notification.adapter.in.web.validation.ValidChannelTarget;

@@ -1,4 +1,5 @@
 package com.notification.adapter.in.web;
+// PRD: F1 (오류 응답), F3-2 (503 재시도 유도) → docs/prd/F1.md
 
 import com.notification.common.exception.ErrorCode;
 import com.notification.common.exception.NotificationException;

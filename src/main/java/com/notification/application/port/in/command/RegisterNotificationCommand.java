@@ -1,4 +1,5 @@
 package com.notification.application.port.in.command;
+// PRD: F1-1, F4-2 (진입점 수렴 지점) → docs/prd/F4.md
 
 import com.notification.domain.NotificationChannel;
 import com.notification.domain.NotificationType;

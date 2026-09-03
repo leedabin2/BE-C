@@ -1,4 +1,5 @@
 package com.notification.infrastructure.config;
+// PRD: F1 → docs/prd/F1.md
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;

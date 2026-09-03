@@ -1,4 +1,5 @@
 package com.notification.application.service;
+// PRD: F1-1, F3-1, F3-2, F4-1 → docs/prd/F1.md, docs/prd/F3.md
 
 import com.notification.application.event.NotificationCreatedEvent;
 import com.notification.application.port.in.RegisterNotificationUseCase;

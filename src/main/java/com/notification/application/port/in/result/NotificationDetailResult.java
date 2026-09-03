@@ -1,4 +1,5 @@
 package com.notification.application.port.in.result;
+// PRD: F1-2, F1-3 → docs/prd/F1.md
 
 import com.notification.domain.Notification;
 import com.notification.domain.NotificationChannel;

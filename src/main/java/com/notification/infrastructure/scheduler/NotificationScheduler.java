@@ -1,4 +1,5 @@
 package com.notification.infrastructure.scheduler;
+// PRD: F5-1, F5-2, F5-3, O-1 → docs/prd/F5.md
 
 import com.notification.application.service.NotificationDispatchService;
 import lombok.RequiredArgsConstructor;

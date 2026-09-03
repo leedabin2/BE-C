@@ -1,4 +1,5 @@
 package com.notification.application.port.out;
+// PRD: F2-2 (예외 분류 계약) → docs/prd/F2.md
 
 import com.notification.application.exception.NonRetryableChannelException;
 import com.notification.application.exception.RetryableChannelException;

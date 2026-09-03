@@ -1,4 +1,5 @@
 package com.notification.application.exception;
+// PRD: F2-2, F2-3 → docs/prd/F2.md
 
 /**
  * 채널 발송 실패 내부 코드.

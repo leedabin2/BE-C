@@ -1,4 +1,5 @@
 package com.notification;
+// PRD: F5 (@EnableScheduling) → docs/prd/F5.md
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

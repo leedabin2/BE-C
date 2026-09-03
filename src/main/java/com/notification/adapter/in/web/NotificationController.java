@@ -1,4 +1,5 @@
 package com.notification.adapter.in.web;
+// PRD: F1-1, F1-2, F1-3 → docs/prd/F1.md
 
 import com.notification.adapter.in.web.dto.NotificationDetailResponse;
 import com.notification.adapter.in.web.dto.NotificationRequest;

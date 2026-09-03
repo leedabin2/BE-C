@@ -322,18 +322,23 @@ PROCESSING
                             ├─ scheduledAt이 미래 → 생략, 스케줄러 위임
                             │
                             ▼
-                NotificationDispatchService.dispatch()
+                NotificationDispatchService.dispatch()   ※ 이 메서드에는 트랜잭션이 없음
                             │
-                            ├─ 조건부 UPDATE tryStartProcessing()
+                            ├─ [TX-A] DispatchStateService.claim()
+                            │   조건부 UPDATE tryStartProcessing()
                             │   WHERE status IN ('PENDING','RETRYING')
-                            │   → PROCESSING (원자적, 1개 스레드만 성공)
+                            │   → PROCESSING (원자적, 1개 스레드만 성공) → 커밋
                             │   다른 스레드가 선점했으면 → 스킵
                             │
-                            ├─ channelSenderPort.send()
+                            ├─ [트랜잭션 밖] channelSenderPort.send()
+                            │   외부 응답을 기다리는 동안 DB 커넥션·행 락을 잡지 않음
                             │
-                            ├─ 성공 → SENT
-                            ├─ RetryableException → RETRYING + 지수 백오프
-                            └─ NonRetryableException → FAILED
+                            └─ [TX-B] DispatchStateService.finish()
+                                조건부 UPDATE WHERE status='PROCESSING'
+                                ├─ 성공 → SENT
+                                ├─ RetryableException → RETRYING + 지수 백오프
+                                ├─ NonRetryableException → FAILED
+                                └─ 0행(Stuck 복구가 먼저 되돌림) → LATE_RESULT_IGNORED 기록
 
 [1분마다] retryScheduler
     └─ PENDING/RETRYING 중

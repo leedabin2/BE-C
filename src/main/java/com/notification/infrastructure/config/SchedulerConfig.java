@@ -1,4 +1,5 @@
 package com.notification.infrastructure.config;
+// PRD: F5-3 (ShedLock) → docs/prd/F5.md
 
 import net.javacrumbs.shedlock.core.LockProvider;
 import net.javacrumbs.shedlock.provider.jdbctemplate.JdbcTemplateLockProvider;

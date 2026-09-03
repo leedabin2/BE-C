@@ -1,4 +1,5 @@
 package com.notification.infrastructure.config;
+// PRD: F4-1 → docs/prd/F4.md
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;

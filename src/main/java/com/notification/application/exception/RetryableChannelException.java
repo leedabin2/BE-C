@@ -1,4 +1,5 @@
 package com.notification.application.exception;
+// PRD: F2-2 → docs/prd/F2.md
 
 import lombok.Getter;
 

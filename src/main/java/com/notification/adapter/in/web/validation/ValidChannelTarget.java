@@ -1,4 +1,5 @@
 package com.notification.adapter.in.web.validation;
+// PRD: F1-1 → docs/prd/F1.md
 
 import jakarta.validation.Constraint;
 import jakarta.validation.Payload;

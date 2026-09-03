@@ -1,4 +1,5 @@
 package com.notification.domain;
+// PRD: F2-1 (전이 이력), F5-1 (STUCK_RECOVERY) → docs/prd/F2.md
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;
