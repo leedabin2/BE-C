@@ -17,7 +17,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
@@ -56,18 +55,44 @@ public class NotificationService implements RegisterNotificationUseCase {
      * 1차만으로는 안 된다 — read-check-write는 원자성이 없어 동시 요청이 전부 통과한다.
      *
      * 재요청에도 200 + 같은 id를 준다. 호출자에겐 "이미 접수됨"이 실패가 아니기 때문. (F1-1·F3-2)
+     *
+     * ⚠️ 이 메서드에는 트랜잭션이 없다. 아래 세 호출이 <b>순차적으로 열고 닫는다.</b>
+     * 중첩(REQUIRES_NEW)하면 스레드 하나가 커넥션 2개를 동시에 잡아 풀이 고갈된다. → DECISIONS D-011
      */
     @Override
-    @Transactional
     public RegisterNotificationResult register(RegisterNotificationCommand command) {
         String idempotencyKey = buildIdempotencyKey(command);
 
-        Optional<Notification> existing = notificationRepositoryPort.findByIdempotencyKey(idempotencyKey);
+        // TX-1. 1차 방어. 이미 있으면 DB에 쓰지 않고 끝낸다
+        Optional<Notification> existing = self.findByIdempotencyKey(idempotencyKey);
         if (existing.isPresent()) {
             log.warn("중복 요청. 기존 결과 반환. idempotencyKey={}", idempotencyKey);
             return RegisterNotificationResult.from(existing.get());
         }
 
+        try {
+            // TX-2. 2차 방어. unique 제약이 여기서 터진다
+            return RegisterNotificationResult.from(self.insertPending(command, idempotencyKey));
+
+        } catch (DataIntegrityViolationException e) {
+            // 예외가 프록시 밖으로 나왔다 = TX-2는 롤백됐고 커넥션도 반납됐다.
+            // 그래서 TX-3이 커넥션을 새로 얻을 수 있다. 안에서 잡으면 rollback-only인 채 커밋을 시도한다
+            log.warn("동시 중복 등록 감지. 기존 알림 반환. idempotencyKey={}", idempotencyKey);
+            return self.findByIdempotencyKey(idempotencyKey)          // TX-3
+                    .map(RegisterNotificationResult::from)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "경합 후 기존 알림 조회 실패. idempotencyKey=" + idempotencyKey));
+        }
+    }
+
+    /**
+     * TX-2. PENDING 저장 + 이력 + 이벤트 등록을 한 트랜잭션으로 묶는다.
+     *
+     * 제약 위반을 여기서 잡지 않는다. 잡으면 Hibernate가 rollback-only로 찍은 트랜잭션을
+     * 그대로 커밋하려다 UnexpectedRollbackException이 난다. 호출자가 프록시 밖에서 잡는다.
+     */
+    @Transactional
+    public Notification insertPending(RegisterNotificationCommand command, String idempotencyKey) {
         Notification notification = Notification.builder()
                 .receiverId(command.receiverId())
                 .channelTarget(command.channelTarget())
@@ -81,39 +106,21 @@ public class NotificationService implements RegisterNotificationUseCase {
                 .scheduledAt(command.scheduledAt())
                 .build();
 
-        Notification saved;
-        try {
-            // save()가 아닌 이유: save()는 flush를 트랜잭션 끝까지 미뤄 제약 위반이 catch 밖에서 터진다
-            saved = notificationRepositoryPort.saveAndFlush(notification);
-        } catch (DataIntegrityViolationException e) {
-            log.warn("동시 중복 등록 감지. 기존 알림 반환. idempotencyKey={}", idempotencyKey);
-            // self로 부르는 이유: @Transactional은 프록시에서만 걸린다. this.메서드()는 프록시를 안 거친다
-            return self.findExistingByCommand(command);
-        }
+        // save()가 아닌 이유: save()는 flush를 트랜잭션 끝까지 미뤄 제약 위반 시점을 통제할 수 없다
+        Notification saved = notificationRepositoryPort.saveAndFlush(notification);
 
         notificationLogRepositoryPort.save(
                 NotificationLog.of(saved.getId(), null, NotificationStatus.PENDING, "CREATED"));
 
-        // 지금은 큐에 보관만 된다. 커밋 후 AFTER_COMMIT에서 발화한다. 지연 단축 장치일 뿐, 지워도 정합성은 안 깨진다
+        // 지금은 큐에 보관만 된다. 커밋 후 AFTER_COMMIT에서 발화한다
         eventPublisherPort.publish(new NotificationCreatedEvent(saved.getId(), saved.getScheduledAt()));
-
-        return RegisterNotificationResult.from(saved);
+        return saved;
     }
 
-    /**
-     * 경합에서 진 쪽이 기존 알림을 읽는다.
-     *
-     * REQUIRES_NEW인 이유: 제약 위반이 난 트랜잭션은 rollback-only로 찍혀 더 쓸 수 없다.
-     * 새 트랜잭션을 열어야 읽을 수 있다. 보안과는 무관하고, 순전히 트랜잭션 상태 문제다.
-     */
-    @Override
-    @Transactional(readOnly = true, propagation = Propagation.REQUIRES_NEW)
-    public RegisterNotificationResult findExistingByCommand(RegisterNotificationCommand command) {
-        String idempotencyKey = buildIdempotencyKey(command);
-        return notificationRepositoryPort.findByIdempotencyKey(idempotencyKey)
-                .map(RegisterNotificationResult::from)
-                .orElseThrow(() -> new IllegalStateException(
-                        "경합 후 기존 알림 조회 실패. idempotencyKey=" + idempotencyKey));
+    /** TX-1 / TX-3. 멱등성 키 조회. 짧게 열고 닫는다. */
+    @Transactional(readOnly = true)
+    public Optional<Notification> findByIdempotencyKey(String idempotencyKey) {
+        return notificationRepositoryPort.findByIdempotencyKey(idempotencyKey);
     }
 
     /**

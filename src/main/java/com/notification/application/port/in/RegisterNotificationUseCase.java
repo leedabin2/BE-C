@@ -5,8 +5,7 @@ import com.notification.application.port.in.command.RegisterNotificationCommand;
 import com.notification.application.port.in.result.RegisterNotificationResult;
 
 public interface RegisterNotificationUseCase {
-    RegisterNotificationResult register(RegisterNotificationCommand command);
 
-    /** 동시 중복 등록 경합 시 idempotency key로 기존 알림을 조회한다. */
-    RegisterNotificationResult findExistingByCommand(RegisterNotificationCommand command);
+    /** 인그레스(HTTP·메시징)가 부르는 유일한 메서드. 경합 처리는 구현체 안에 있다. */
+    RegisterNotificationResult register(RegisterNotificationCommand command);
 }

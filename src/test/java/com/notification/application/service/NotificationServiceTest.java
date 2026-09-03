@@ -18,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.Optional;
 
@@ -40,6 +41,10 @@ class NotificationServiceTest {
 
     @BeforeEach
     void setUp() {
+        // register()는 트랜잭션 경계를 나누려고 self(자기 프록시)로 내부 메서드를 부른다.
+        // 단위 테스트엔 프록시가 없으므로 자기 자신을 넣는다. 호출 순서 검증은 그대로 유효하다.
+        ReflectionTestUtils.setField(notificationService, "self", notificationService);
+
         command = new RegisterNotificationCommand(
                 42L,
                 NotificationType.PAYMENT_CONFIRMED,

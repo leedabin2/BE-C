@@ -5,25 +5,29 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * 통합 테스트 베이스 클래스.
  *
- * MySQL 컨테이너를 static으로 선언해 전체 테스트 스위트에서 1개 컨테이너만 기동한다.
- * 컨테이너 재사용으로 기동 비용(~15초)을 최초 1회로 제한한다.
+ * <b>싱글턴 컨테이너 패턴.</b> {@code @Testcontainers} + {@code @Container}를 쓰면 JUnit이
+ * <b>테스트 클래스가 끝날 때 컨테이너를 멈춘다.</b> 그러면 두 번째 통합 테스트 클래스부터는
+ * 죽은 컨테이너에 붙으려다 "Connection is not available (total=0)"으로 전부 실패한다.
+ *
+ * static 블록에서 직접 start()하면 JVM 하나당 한 번만 뜨고, 종료는 Testcontainers의
+ * Ryuk 컨테이너가 JVM 종료 시 처리한다. 기동 비용(~15초)도 최초 1회로 제한된다.
  */
-@Testcontainers
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 public abstract class AbstractIntegrationTest {
 
-    @Container
-    static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0")
+    static final MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0")
             .withDatabaseName("notification_test")
             .withUsername("test")
             .withPassword("test");
+
+    static {
+        mysql.start();
+    }
 
     @DynamicPropertySource
     static void overrideProperties(DynamicPropertyRegistry registry) {
