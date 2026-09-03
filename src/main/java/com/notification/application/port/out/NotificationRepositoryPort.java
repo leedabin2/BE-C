@@ -1,4 +1,5 @@
 package com.notification.application.port.out;
+// PRD: F2, F3, F5 → docs/prd/F3.md, docs/prd/F5.md
 
 import com.notification.domain.Notification;
 import org.springframework.data.domain.Page;
@@ -70,6 +71,20 @@ public interface NotificationRepositoryPort {
      * @return 상태 전환 성공 시 true, 이미 다른 스레드가 선점한 경우 false
      */
     boolean tryStartProcessing(Long id);
+
+    /**
+     * CAS 방식으로 PROCESSING → SENT / RETRYING / FAILED 결과 반영.
+     *
+     * 외부 발송은 트랜잭션 밖에서 끝났고, 이 호출은 별도 트랜잭션(TX-B)에서 실행된다.
+     * 그 사이 Stuck 복구가 이 행을 PENDING으로 되돌렸을 수 있으므로
+     * {@code WHERE status = 'PROCESSING'}으로 "내가 선점한 상태 그대로인가"를 확인하고 쓴다.
+     * 전이 규칙(횟수·백오프)은 도메인 메서드가 이미 계산했고, 여기서는 그 결과 필드
+     * (status, retryCount, nextRetryAt, failureReason)만 그대로 기록한다.
+     *
+     * @param notification 도메인 전이가 끝난 detached 엔티티
+     * @return 1행 반영 시 true. 0행이면 이미 PROCESSING이 아니라는 뜻 → 호출자가 "늦은 결과"로 기록한다
+     */
+    boolean tryFinishProcessing(Notification notification);
 
     /**
      * CAS 방식으로 PROCESSING → PENDING 복구.

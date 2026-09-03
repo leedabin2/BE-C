@@ -1,4 +1,5 @@
 package com.notification.domain;
+// PRD: F2-1, F2-2, O-1, O-3, O-4 → docs/prd/F2.md
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -137,9 +138,15 @@ public class Notification {
         this.updatedAt = LocalDateTime.now();
     }
 
-    /** 발송 성공 시 호출. PROCESSING → SENT. */
+    /**
+     * 발송 성공 시 호출. PROCESSING → SENT.
+     * 재시도 예약 시각과 마지막 실패 사유를 지운다. SENT에 실패 사유가 남아 있으면 상태가 거짓말을 한다.
+     * 회차별 실패 사유는 dispatch_history에 append-only로 보존된다.
+     */
     public void markSent() {
         this.status = NotificationStatus.SENT;
+        this.nextRetryAt = null;
+        this.failureReason = null;
     }
 
     /**

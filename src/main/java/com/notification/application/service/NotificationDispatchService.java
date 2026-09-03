@@ -1,13 +1,12 @@
 package com.notification.application.service;
+// PRD: F2-2, F2-3, F3-1, F5-1, F5-2, F5-3 → docs/prd/F2.md, docs/prd/F5.md
 
 import com.notification.application.exception.ChannelFailureCode;
 import com.notification.application.exception.NonRetryableChannelException;
 import com.notification.application.exception.RetryableChannelException;
 import com.notification.application.port.out.ChannelSenderPort;
-import com.notification.application.port.out.DispatchHistoryRepositoryPort;
 import com.notification.application.port.out.NotificationLogRepositoryPort;
 import com.notification.application.port.out.NotificationRepositoryPort;
-import com.notification.domain.DispatchHistory;
 import com.notification.domain.Notification;
 import com.notification.domain.NotificationLog;
 import com.notification.domain.NotificationStatus;
@@ -18,7 +17,17 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
+/**
+ * 발송 조율자.
+ *
+ * {@link #dispatch}는 <b>트랜잭션이 없다.</b> DB 상태 전이는 {@link DispatchStateService}의 짧은 트랜잭션 2개가 맡고,
+ * 외부 발송은 그 사이 트랜잭션 밖에서 일어난다. 외부 응답을 기다리는 동안 붙잡는 자원은 스레드 하나뿐이며
+ * DB 커넥션·행 락은 잡지 않는다. (RULES §2-1, §2-7)
+ *
+ * 실행 스레드: {@code notification-*}(이벤트 핸들러) 또는 {@code scheduling-*}(스케줄러).
+ */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -26,8 +35,8 @@ public class NotificationDispatchService {
 
     private final NotificationRepositoryPort notificationRepositoryPort;
     private final ChannelSenderPort channelSenderPort;
-    private final DispatchHistoryRepositoryPort dispatchHistoryRepositoryPort;
     private final NotificationLogRepositoryPort notificationLogRepositoryPort;
+    private final DispatchStateService dispatchStateService;
 
     /**
      * PESSIMISTIC_WRITE(SKIP LOCKED)는 트랜잭션이 열려 있어야 동작한다.
@@ -63,60 +72,52 @@ public class NotificationDispatchService {
     }
 
     /**
-     * 단일 알림 발송을 처리한다.
+     * 단일 알림 발송. <b>이 메서드에는 트랜잭션이 없다.</b>
      *
-     * CAS로 PROCESSING 전환에 성공한 스레드만 실제 발송을 수행한다.
-     * 발송 결과마다 DispatchHistory와 NotificationLog를 기록한다.
+     * <pre>
+     * TX-A  claim   : 선점 실패(0행)면 여기서 끝. 다른 스레드·인스턴스가 가져간 정상 스킵
+     *  ---  send    : 외부 I/O. 예외를 재시도 가능/불가로 분류해 도메인 전이로 계산만 한다 (DB 접근 없음)
+     * TX-B  finish  : 조건부 UPDATE로 결과 반영 + 이력
+     * </pre>
+     *
+     * 이 지점에서 죽으면: claim 커밋 후 ~ finish 커밋 전에는 PROCESSING으로 남고, Stuck 복구(5분 주기, 10분 임계)가 회수한다.
+     * finish의 DB 예외는 호출자(스케줄러·이벤트 핸들러)로 전파된다. 삼키지 않는다.
      */
-    @Transactional
     public void dispatch(Long notificationId) {
-        if (!notificationRepositoryPort.tryStartProcessing(notificationId)) {
+        Optional<Notification> claimed = dispatchStateService.claim(notificationId);
+        if (claimed.isEmpty()) {
             log.debug("이미 처리 중인 알림 스킵. id={}", notificationId);
             return;
         }
-
-        Notification notification = notificationRepositoryPort.findById(notificationId)
-                .orElseThrow(() -> new IllegalStateException("알림을 찾을 수 없음. id=" + notificationId));
-
-        // PROCESSING 전이 로그 (CAS가 DB에서 이미 변경했으므로 이전 상태 추정)
-        notificationLogRepositoryPort.save(
-                NotificationLog.of(notificationId, null, NotificationStatus.PROCESSING, "DISPATCH_START"));
+        Notification notification = claimed.get();
 
         // 이번 시도 회차 = 현재 retryCount + 1 (markRetrying 전에 캡처)
         int attemptNumber = notification.getRetryCount() + 1;
+        String failureCode = null;
 
         try {
             channelSenderPort.send(notification);
             notification.markSent();
-            dispatchHistoryRepositoryPort.save(DispatchHistory.success(notificationId, attemptNumber));
-            notificationLogRepositoryPort.save(
-                    NotificationLog.of(notificationId, NotificationStatus.PROCESSING, NotificationStatus.SENT, null));
             log.info("알림 발송 성공. id={}, channel={}", notificationId, notification.getChannel());
 
         } catch (RetryableChannelException e) {
-            notification.markRetrying(e.getFailureCode().name());
-            recordFailure(notificationId, attemptNumber, e.getFailureCode().name(), notification.getStatus());
+            failureCode = e.getFailureCode().name();
+            notification.markRetrying(failureCode);
             log.warn("재시도 가능 발송 실패. id={}, code={}, retryCount={}",
-                    notificationId, e.getFailureCode(), notification.getRetryCount());
+                    notificationId, failureCode, notification.getRetryCount());
 
         } catch (NonRetryableChannelException e) {
-            notification.markFailed(e.getFailureCode().name());
-            recordFailure(notificationId, attemptNumber, e.getFailureCode().name(), NotificationStatus.FAILED);
-            log.error("재시도 불가 발송 실패. id={}, code={}", notificationId, e.getFailureCode());
+            failureCode = e.getFailureCode().name();
+            notification.markFailed(failureCode);
+            log.error("재시도 불가 발송 실패. id={}, code={}", notificationId, failureCode);
 
         } catch (Exception e) {
-            notification.markRetrying(ChannelFailureCode.CHANNEL_UNAVAILABLE.name());
-            recordFailure(notificationId, attemptNumber, ChannelFailureCode.CHANNEL_UNAVAILABLE.name(), notification.getStatus());
+            // 원인 불명은 보수적으로 재시도. 예외 원문은 DB에 넣지 않고 로그에만 (RULES §5-4, §5-5)
+            failureCode = ChannelFailureCode.CHANNEL_UNAVAILABLE.name();
+            notification.markRetrying(failureCode);
             log.error("예상치 못한 발송 오류. id={}", notificationId, e);
-
-        } finally {
-            notificationRepositoryPort.save(notification);
         }
-    }
 
-    private void recordFailure(Long notificationId, int attemptNumber, String failureCode, NotificationStatus toStatus) {
-        dispatchHistoryRepositoryPort.save(DispatchHistory.failure(notificationId, attemptNumber, failureCode));
-        notificationLogRepositoryPort.save(
-                NotificationLog.of(notificationId, NotificationStatus.PROCESSING, toStatus, failureCode));
+        dispatchStateService.finish(notification, attemptNumber, failureCode);
     }
 }

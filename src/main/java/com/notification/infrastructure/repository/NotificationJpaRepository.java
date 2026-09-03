@@ -1,4 +1,5 @@
 package com.notification.infrastructure.repository;
+// PRD: F3-1 (unique), F5-3 (SKIP LOCKED·CAS), O-1 → docs/prd/F3.md, docs/prd/F5.md
 
 import com.notification.domain.Notification;
 import com.notification.domain.NotificationStatus;
@@ -82,6 +83,21 @@ public interface NotificationJpaRepository extends JpaRepository<Notification, L
                    "WHERE id = :id AND status IN ('PENDING', 'RETRYING')",
            nativeQuery = true)
     int tryStartProcessing(@Param("id") Long id);
+
+    /**
+     * CAS 방식으로 PROCESSING → 결과 상태(SENT/RETRYING/FAILED) 반영.
+     * 기대 상태 PROCESSING을 WHERE에 넣어, Stuck 복구가 먼저 PENDING으로 되돌린 행은 0행으로 스킵된다.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query(value = "UPDATE notification SET status = :status, retry_count = :retryCount, " +
+                   "next_retry_at = :nextRetryAt, failure_reason = :failureReason, updated_at = NOW() " +
+                   "WHERE id = :id AND status = 'PROCESSING'",
+           nativeQuery = true)
+    int tryFinishProcessing(@Param("id") Long id,
+                            @Param("status") String status,
+                            @Param("retryCount") int retryCount,
+                            @Param("nextRetryAt") LocalDateTime nextRetryAt,
+                            @Param("failureReason") String failureReason);
 
     @Modifying(clearAutomatically = true)
     @Query(value = "UPDATE notification SET status = 'PENDING', retry_count = 0, next_retry_at = NULL, updated_at = NOW() " +

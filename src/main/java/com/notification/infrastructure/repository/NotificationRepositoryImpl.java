@@ -1,4 +1,5 @@
 package com.notification.infrastructure.repository;
+// PRD: F3, F5 → docs/prd/F3.md, docs/prd/F5.md
 
 import com.notification.domain.Notification;
 import com.notification.domain.NotificationStatus;
@@ -61,6 +62,16 @@ public class NotificationRepositoryImpl implements NotificationRepositoryPort {
     @Override
     public boolean tryStartProcessing(Long id) {
         return jpaRepository.tryStartProcessing(id) > 0;
+    }
+
+    @Override
+    public boolean tryFinishProcessing(Notification n) {
+        return jpaRepository.tryFinishProcessing(
+                n.getId(),
+                n.getStatus().name(),
+                n.getRetryCount(),
+                n.getNextRetryAt(),
+                n.getFailureReason()) > 0;
     }
 
     @Override
