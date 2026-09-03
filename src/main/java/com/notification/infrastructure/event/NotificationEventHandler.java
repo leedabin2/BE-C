@@ -13,16 +13,13 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.time.LocalDateTime;
 
 /**
- * 알림 생성 이벤트를 수신해 발송을 트리거하는 핸들러.
+ * 커밋 직후 발송을 트리거한다. <b>지연 단축이 유일한 목적이다.</b>
  *
- * Transactional Outbox Pattern의 발송 트리거 역할을 한다.
+ * AFTER_COMMIT: 커밋된 뒤에만 실행. 커밋 전에 죽으면 이 핸들러는 아예 안 돈다.
+ * @Async: notificationExecutor로 스레드를 갈라 HTTP 응답이 발송을 기다리지 않게 한다.
  *
- * {@code @TransactionalEventListener(AFTER_COMMIT)}: DB 커밋이 완료된 후에만 실행된다.
- * 커밋 전에 서버가 재시작되면 이 핸들러는 실행되지 않으며,
- * PENDING 상태로 남은 알림은 스케줄러가 재처리한다.
- *
- * {@code @Async}: 별도의 스레드풀(notificationExecutor)에서 실행되어
- * 발송 지연이 HTTP 응답 시간에 영향을 주지 않는다.
+ * ⚠️ 유실 방지 장치가 아니다. 이 핸들러가 통째로 실패해도 행은 PENDING이라
+ * 스케줄러가 1분 내 회수한다. 지우면 발송이 최대 1분 늦어질 뿐 정합성은 그대로다.
  */
 @Slf4j
 @Component
@@ -31,15 +28,7 @@ public class NotificationEventHandler {
 
     private final NotificationDispatchService dispatchService;
 
-    /**
-     * 알림 생성 이벤트를 수신한다.
-     *
-     * 트랜잭션 커밋 이후 비동기로 실행되므로 이 메서드의 예외가
-     * 발송 요청 API의 응답에 영향을 주지 않는다.
-     * 발송 실패 시 스케줄러가 RETRYING 상태를 감지해 재처리한다.
-     *
-     * @param event 알림 생성 이벤트 (notificationId 포함)
-     */
+    /** 실행 스레드: notification-*. 여기서 터져도 HTTP 응답에는 영향이 없다(이미 반환됨). */
     @Async("notificationExecutor")
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     public void handle(NotificationCreatedEvent event) {
