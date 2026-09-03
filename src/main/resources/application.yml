@@ -21,11 +21,11 @@ spring:
     open-in-view: false
 
   task:
-    execution:
+    # 스케줄러 스레드풀. 기본값이 1이라 @Scheduled 두 개가 한 스레드를 공유했다.
+    # 재처리가 길어지면 Stuck 복구가 아예 못 돈다. → docs/DECISIONS.md D-001
+    scheduling:
       pool:
-        core-size: 5
-        max-size: 20
-        queue-capacity: 100
+        size: 4
 
 springdoc:
   swagger-ui:

@@ -2,14 +2,15 @@ package com.notification.infrastructure.scheduler;
 // PRD: F5-1, F5-2, F5-3, O-1 → docs/prd/F5.md
 
 import com.notification.application.service.NotificationDispatchService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
+import java.util.concurrent.Executor;
 
 /**
  * 알림 재처리 및 Stuck 복구 스케줄러.
@@ -25,10 +26,16 @@ import java.util.List;
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class NotificationScheduler {
 
     private final NotificationDispatchService dispatchService;
+    private final Executor batchExecutor;
+
+    public NotificationScheduler(NotificationDispatchService dispatchService,
+                                 @Qualifier("batchExecutor") Executor batchExecutor) {
+        this.dispatchService = dispatchService;
+        this.batchExecutor = batchExecutor;
+    }
 
     @Value("${notification.scheduler.retry.batch-size:100}")
     private int retryBatchSize;
@@ -39,8 +46,10 @@ public class NotificationScheduler {
     /**
      * PENDING/RETRYING 알림 재처리.
      *
-     * fixedDelay: 이전 실행 완료 후 N ms 뒤에 실행 (cron과 달리 실행 시간이 주기에 포함되지 않음).
-     * lockAtMostFor: 서버가 죽어도 이 시간 후엔 락이 만료되어 다른 인스턴스가 실행 가능.
+     * 이 메서드는 "조회 + 제출"만 한다. 발송은 batchExecutor가 병렬로 처리한다.
+     *
+     * fixedDelay: 이전 실행 완료 후 N ms 뒤에 실행.
+     * lockAtMostFor: 타임아웃이 아니라 락 만료다. 넘겨도 작업은 안 멈추고 락만 풀린다.
      * lockAtLeastFor: 너무 빨리 끝나도 이 시간은 락을 유지해 즉시 재실행을 방지.
      */
     @Scheduled(fixedDelayString = "${notification.scheduler.retry.fixed-delay-ms:60000}")
@@ -50,13 +59,18 @@ public class NotificationScheduler {
         List<Long> ids = dispatchService.fetchPendingIds(retryBatchSize);
         if (ids.isEmpty()) return;
 
-        log.info("[재처리] 대상 {}건 조회", ids.size());
+        log.info("[재처리] 대상 {}건 조회 → batchExecutor 제출", ids.size());
         for (Long id : ids) {
-            try {
-                dispatchService.dispatch(id);
-            } catch (Exception e) {
-                log.error("[재처리] dispatch 오류. id={}", id, e);
-            }
+            // 스케줄러 스레드에서 직접 발송하지 않는다. 제출만 하고 즉시 반환한다.
+            // 직접 하면 100건 × 외부 I/O 만큼 이 스레드가 묶여 lockAtMostFor(55s)를 넘고,
+            // 락이 만료되면 다른 인스턴스가 같은 배치를 다시 돌기 시작한다. (DECISIONS D-001)
+            batchExecutor.execute(() -> {
+                try {
+                    dispatchService.dispatch(id);
+                } catch (Exception e) {
+                    log.error("[재처리] dispatch 오류. id={}", id, e);
+                }
+            });
         }
     }
 
