@@ -67,11 +67,11 @@ class NotificationServiceTest {
     @DisplayName("신규 요청: save 1회, publish 1회, NotificationLog CREATED 기록")
     void register_newRequest_savesAndPublishes() {
         given(notificationRepositoryPort.findByIdempotencyKey(any())).willReturn(Optional.empty());
-        given(notificationRepositoryPort.save(any())).willReturn(savedNotification);
+        given(notificationRepositoryPort.saveAndFlush(any())).willReturn(savedNotification);
 
         notificationService.register(command);
 
-        verify(notificationRepositoryPort, times(1)).save(any(Notification.class));
+        verify(notificationRepositoryPort, times(1)).saveAndFlush(any(Notification.class));
         verify(eventPublisherPort, times(1)).publish(any(NotificationCreatedEvent.class));
 
         ArgumentCaptor<com.notification.domain.NotificationLog> logCaptor =
@@ -92,7 +92,7 @@ class NotificationServiceTest {
 
         RegisterNotificationResult result = notificationService.register(command);
 
-        verify(notificationRepositoryPort, never()).save(any());
+        verify(notificationRepositoryPort, never()).saveAndFlush(any());
         verify(eventPublisherPort, never()).publish(any());
         verify(notificationLogRepositoryPort, never()).save(any());
 
@@ -105,7 +105,7 @@ class NotificationServiceTest {
     @DisplayName("동일 커맨드는 항상 동일한 idempotency key를 생성한다")
     void register_sameCommand_generatesSameIdempotencyKey() {
         given(notificationRepositoryPort.findByIdempotencyKey(any())).willReturn(Optional.empty());
-        given(notificationRepositoryPort.save(any())).willReturn(savedNotification);
+        given(notificationRepositoryPort.saveAndFlush(any())).willReturn(savedNotification);
 
         notificationService.register(command);
         notificationService.register(command);
