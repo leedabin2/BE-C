@@ -3,6 +3,7 @@ package com.notification.adapter.in.web.dto;
 
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.notification.adapter.in.web.validation.ValidChannelTarget;
+import com.notification.application.port.in.command.RegisterNotificationCommand;
 import com.notification.domain.NotificationChannel;
 import com.notification.domain.NotificationType;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -51,4 +52,12 @@ public record NotificationRequest(
 
         @Schema(description = "예약 발송 시각 (null이면 즉시)", example = "2025-06-01T09:00:00")
         LocalDateTime scheduledAt
-) {}
+) {
+
+    /** HTTP DTO → Command. 인그레스는 변환만 한다. 메시징 어댑터도 같은 모양의 toCommand()를 갖는다. */
+    public RegisterNotificationCommand toCommand() {
+        return new RegisterNotificationCommand(
+                receiverId, notificationType, channel, channelTarget,
+                eventId, referenceId, referenceType, contentData, scheduledAt);
+    }
+}

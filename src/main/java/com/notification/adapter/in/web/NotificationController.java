@@ -7,7 +7,6 @@ import com.notification.adapter.in.web.dto.NotificationResponse;
 import com.notification.adapter.in.web.support.CurrentUserId;
 import com.notification.application.port.in.GetNotificationUseCase;
 import com.notification.application.port.in.RegisterNotificationUseCase;
-import com.notification.application.port.in.command.RegisterNotificationCommand;
 import com.notification.application.port.in.result.NotificationDetailResult;
 import com.notification.application.port.in.result.RegisterNotificationResult;
 import com.notification.common.response.ApiResponse;
@@ -49,19 +48,8 @@ public class NotificationController {
             @Parameter(hidden = true) @CurrentUserId Long requesterId,
             @Valid @RequestBody NotificationRequest request
     ) {
-        RegisterNotificationCommand command = new RegisterNotificationCommand(
-                request.receiverId(),
-                request.notificationType(),
-                request.channel(),
-                request.channelTarget(),
-                request.eventId(),
-                request.referenceId(),
-                request.referenceType(),
-                request.contentData(),
-                request.scheduledAt()
-        );
-
-        RegisterNotificationResult result = registerNotificationUseCase.register(command);
+        // 변환만. 멱등성·상태·발송 판단은 전부 UseCase 아래에 있다 → 컨슈머를 추가해도 그 아래는 무변경 (F4-2)
+        RegisterNotificationResult result = registerNotificationUseCase.register(request.toCommand());
         return ResponseEntity.ok(ApiResponse.success(NotificationResponse.from(result)));
     }
 
