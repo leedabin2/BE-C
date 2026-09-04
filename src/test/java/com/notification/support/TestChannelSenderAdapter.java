@@ -10,6 +10,9 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Component;
 
+import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -26,6 +29,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 @Component
 public class TestChannelSenderAdapter implements ChannelSenderPort {
 
+    /** 발송 1건의 기록. 어느 스레드가 몇 번째로 무엇을 보냈는지. */
+    public record SendRecord(long notificationId, String thread, int order, long atNanos) {
+        /** notification-rt-* 이면 즉시 발송 경로, notification-batch-* 면 스케줄러 회수 경로. */
+        public boolean viaRealtime() { return thread.startsWith("notification-rt-"); }
+    }
+
+    private final Queue<SendRecord> records = new ConcurrentLinkedQueue<>();
     private final AtomicInteger failCount = new AtomicInteger(0);
     private final AtomicInteger sendCallCount = new AtomicInteger(0);
     private volatile boolean throwTimeout = false;
@@ -34,9 +44,12 @@ public class TestChannelSenderAdapter implements ChannelSenderPort {
     @Override
     public void send(Notification notification) {
         String thread = Thread.currentThread().getName();
-        sendCallCount.incrementAndGet();
-        log.info("[TestChannel] send 진입 id={} thread={} (delay={}ms, failCount={}, timeout={}) [총 호출={}]",
-                notification.getId(), thread, sendDelayMs, failCount.get(), throwTimeout, sendCallCount.get());
+        int order = sendCallCount.incrementAndGet();
+        records.add(new SendRecord(notification.getId(), thread, order, System.nanoTime()));
+        if (log.isDebugEnabled()) {
+            log.debug("[TestChannel] send 진입 id={} thread={} (delay={}ms) [총 호출={}]",
+                    notification.getId(), thread, sendDelayMs, order);
+        }
 
         if (sendDelayMs > 0) {
             try {
@@ -81,8 +94,14 @@ public class TestChannelSenderAdapter implements ChannelSenderPort {
         return sendCallCount.get();
     }
 
+    /** 발송 기록. 스레드 분포·처리 순서 분석용. */
+    public List<SendRecord> getRecords() {
+        return List.copyOf(records);
+    }
+
     /** 테스트 간 상태 초기화 */
     public void reset() {
+        this.records.clear();
         this.failCount.set(0);
         this.sendCallCount.set(0);
         this.throwTimeout = false;

@@ -26,6 +26,9 @@ import java.util.Optional;
  */
 public interface NotificationJpaRepository extends JpaRepository<Notification, Long> {
 
+    /** 상태별 건수. 만 건 규모에서 findAll()로 세면 메모리를 통째로 쓴다. */
+    long countByStatusIn(List<NotificationStatus> statuses);
+
     /** 멱등성 키로 알림 조회. */
     Optional<Notification> findByIdempotencyKey(String idempotencyKey);
 
