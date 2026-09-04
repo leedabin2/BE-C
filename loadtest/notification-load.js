@@ -34,11 +34,10 @@ const scenarios = {
       { duration: '30s', target: 0 },
     ],
   },
-  // 순간 폭증 — 워커풀 거부와 스케줄러 회수가 보인다
+  // 순간 폭증 — 전부 다른 eventId 10,000건. 워커풀 거부와 스케줄러 회수가 보인다
   spike: {
-    executor: 'constant-arrival-rate',
-    rate: 1000, timeUnit: '1s', duration: '30s',
-    preAllocatedVUs: 200, maxVUs: 1000,
+    executor: 'shared-iterations',
+    vus: 200, iterations: 10000, maxDuration: '5m',
   },
   // 멱등성 — 같은 eventId를 동시에 때린다 (F3-2)
   idempotency: {
@@ -49,6 +48,8 @@ const scenarios = {
 
 export const options = {
   scenarios: { [SCENARIO]: scenarios[SCENARIO] },
+  // p(99)는 기본 집계에 없다. 명시해야 요약에 나온다
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   thresholds: {
     // ★ 핵심 단언: 접수 응답은 SMTP 지연과 무관해야 한다
     'accept_latency': ['p(99)<1000'],
@@ -58,16 +59,20 @@ export const options = {
 };
 
 export default function () {
-  // idempotency 시나리오는 모든 VU가 같은 eventId를 쓴다 → 1건만 저장돼야 한다
-  const eventId = SCENARIO === 'idempotency'
-    ? 'k6-idem-fixed'
-    : `k6-${__VU}-${__ITER}-${Date.now()}`;
+  const isIdem = SCENARIO === 'idempotency';
+
+  // ⚠️ 멱등성 키 = SHA-256(type | eventId | receiverId | channel)
+  // eventId만 고정하고 receiverId를 VU마다 다르게 두면 키가 갈라져 VU 수만큼 저장된다.
+  // 같은 이벤트라도 수신자가 다르면 별개 알림이기 때문 — 설계상 맞는 동작이다.
+  // 중복을 검증하려면 네 재료를 전부 고정해야 한다.
+  const eventId = isIdem ? 'k6-idem-fixed' : `k6-${__VU}-${__ITER}-${Date.now()}`;
+  const receiverId = isIdem ? 777 : __VU;
 
   const payload = JSON.stringify({
-    receiverId: __VU,
+    receiverId: receiverId,
     notificationType: 'PAYMENT_CONFIRMED',
     channel: 'EMAIL',
-    channelTarget: `user${__VU}@load.test`,
+    channelTarget: `user${receiverId}@load.test`,
     eventId: eventId,
     referenceId: __ITER + 1,
     referenceType: 'PAYMENT',
@@ -75,7 +80,7 @@ export default function () {
   });
 
   const res = http.post(`${BASE_URL}/api/v1/notifications`, payload, {
-    headers: { 'Content-Type': 'application/json', 'X-User-Id': String(__VU) },
+    headers: { 'Content-Type': 'application/json', 'X-User-Id': String(receiverId) },
     tags: { name: 'register' },
   });
 
@@ -88,7 +93,7 @@ export default function () {
     '503이면 Retry-After 존재': (r) => r.status !== 503 || !!r.headers['Retry-After'],
   });
 
-  if (SCENARIO === 'idempotency' && res.status < 300) duplicateHit.add(1);
+  if (isIdem && res.status < 300) duplicateHit.add(1);
 }
 
 export function handleSummary(data) {
@@ -100,7 +105,7 @@ export function handleSummary(data) {
 ╔═══════════════ k6 부하 결과 (${SCENARIO}) ═══════════════
 ║ 요청       : ${p('http_reqs', 'count')}건  ·  ${Math.round(m.http_reqs?.values.rate || 0)} RPS
 ╠═════════════════ 접수 응답 (F1-1) ═════════════════════
-║ p50 ${p('accept_latency','p(50)')}ms · p95 ${p('accept_latency','p(95)')}ms · p99 ${p('accept_latency','p(99)')}ms · max ${p('accept_latency','max')}ms
+║ p50 ${p('accept_latency','med')}ms · p95 ${p('accept_latency','p(95)')}ms · p99 ${p('accept_latency','p(99)')}ms · max ${p('accept_latency','max')}ms
 ║ 실패율     : ${((m.http_req_failed?.values.rate || 0) * 100).toFixed(2)}%
 ║ 5xx        : ${((m.rejected_5xx?.values.rate || 0) * 100).toFixed(2)}%
 ╠════════════════════════════════════════════════════════
