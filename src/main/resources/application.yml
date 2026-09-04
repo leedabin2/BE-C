@@ -4,6 +4,18 @@ spring:
     username: ${DB_USERNAME}
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      # 커넥션은 "트랜잭션이 열려 있는 동안"만 점유된다. 외부 발송 구간은 TX 밖이라 안 잡는다.
+      # 그래서 워커 수(최대 50) > 커넥션 수(20)로 둔다. 다만 무한정은 아니다 —
+      # 워커가 일제히 claim/finish를 치는 버스트에서는 워커 수만큼 동시 요구가 몰린다.
+      # ⚠️ N대로 늘릴 때: maximum-pool-size × 인스턴스 수 < MySQL max_connections(기본 151)
+      #    20 × 3대 = 60. 7대까지 안전하다. → docs/DECISIONS.md D-013
+      maximum-pool-size: 20
+      minimum-idle: 5
+      # 기본 30초는 너무 길다. 그 사이 스레드가 묶여 장애가 번진다. 빨리 실패하고 다음 주기에 회수한다
+      connection-timeout: 5000
+      # 반납 안 된 커넥션을 조기에 잡아낸다. D-011 같은 문제를 로그로 먼저 본다
+      leak-detection-threshold: 10000
 
   sql:
     init:
