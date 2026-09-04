@@ -48,6 +48,15 @@ springdoc:
     path: /api-docs
 
 notification:
+  channel:
+    # ⚠️ Jakarta Mail 기본값은 셋 다 infinite다. 명시하지 않으면 워커가 영구히 묶인다.
+    # 최악 소요 = connect + roundTrips × max(read, write) = 5 + 7×30 = 215초
+    # DispatchInvariantValidator가 기동 시 "최악 소요 × 2 < Stuck 임계(600초)"를 검증한다
+    timeout:
+      connect-ms: 5000
+      read-ms: 30000
+      write-ms: 30000
+      round-trips: 7
   scheduler:
     retry:
       fixed-delay-ms: 60000    # 재처리 주기: 1분 (nextRetryAt 최소 단위와 맞춤)

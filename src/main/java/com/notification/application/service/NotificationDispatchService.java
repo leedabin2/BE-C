@@ -112,10 +112,11 @@ public class NotificationDispatchService {
             log.error("재시도 불가 발송 실패. id={}, code={}", notificationId, failureCode);
 
         } catch (Exception e) {
-            // 원인 불명은 보수적으로 재시도. 예외 원문은 DB에 넣지 않고 로그에만 (RULES §5-4, §5-5)
-            failureCode = ChannelFailureCode.CHANNEL_UNAVAILABLE.name();
+            // CHANNEL_UNAVAILABLE로 뭉개지 않는다. 그러면 코드 버그(NPE 등)가 외부 장애로 위장돼
+            // 영원히 안 고쳐진다. 보수적으로 재시도하되 코드는 분리한다. 원문은 로그에만 (RULES §5-4)
+            failureCode = ChannelFailureCode.CHANNEL_UNKNOWN.name();
             notification.markRetrying(failureCode);
-            log.error("예상치 못한 발송 오류. id={}", notificationId, e);
+            log.error("분류되지 않은 발송 오류. id={}, code={}", notificationId, failureCode, e);
         }
 
         dispatchStateService.finish(notification, attemptNumber, failureCode);

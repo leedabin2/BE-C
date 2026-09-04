@@ -128,9 +128,10 @@ class NotificationDispatchServiceTest {
     }
 
     // [시나리오] 어댑터가 분류하지 못한 예외(NPE 등)가 새면 PROCESSING이 남아 10분 뒤 Stuck 복구까지 기다려야 함
-    // → 원인 불명은 보수적으로 Retryable(CHANNEL_UNAVAILABLE)로 분류해 즉시 finish되는지 검증
+    // → 보수적으로 재시도하되 CHANNEL_UNKNOWN으로 분리한다. UNAVAILABLE로 뭉개면
+    //   코드 버그가 외부 장애로 위장돼 failure_reason만 보고는 영원히 원인을 못 찾는다 (F2-3)
     @Test
-    @DisplayName("원인 불명 예외: CHANNEL_UNAVAILABLE로 RETRYING 처리, finish 반드시 1회")
+    @DisplayName("분류 못 한 예외: CHANNEL_UNKNOWN으로 RETRYING 처리, finish 반드시 1회")
     void dispatch_unknownException_treatedAsRetryable() {
         given(dispatchStateService.claim(1L)).willReturn(Optional.of(notification));
         willThrow(new RuntimeException("unexpected")).given(channelSenderPort).send(any());
@@ -138,8 +139,10 @@ class NotificationDispatchServiceTest {
         notificationDispatchService.dispatch(1L);
 
         ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
-        verify(dispatchStateService, times(1)).finish(captor.capture(), eq(1), eq("CHANNEL_UNAVAILABLE"));
+        verify(dispatchStateService, times(1)).finish(captor.capture(), eq(1), eq("CHANNEL_UNKNOWN"));
         assertThat(captor.getValue().getStatus()).isEqualTo(NotificationStatus.RETRYING);
+        // 발송 여부 불명 → 재시도가 중복을 만들 수 있다는 사실이 코드에 남아 있어야 한다
+        assertThat(ChannelFailureCode.CHANNEL_UNKNOWN.isDeliveryUnknown()).isTrue();
     }
 
     // [시나리오] 결과 반영(TX-B) 중 DB 장애 → 여기서 예외를 삼키면 "발송했는데 기록 없음"이 조용히 묻힘
