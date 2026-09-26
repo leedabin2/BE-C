@@ -11,14 +11,20 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -31,6 +37,7 @@ class DispatchStateServiceTest {
     @Mock NotificationRepositoryPort notificationRepositoryPort;
     @Mock DispatchHistoryRepositoryPort dispatchHistoryRepositoryPort;
     @Mock NotificationLogRepositoryPort notificationLogRepositoryPort;
+    @Spy RetrySchedulePolicy retrySchedulePolicy = new RetrySchedulePolicy(() -> 42);
 
     @InjectMocks DispatchStateService dispatchStateService;
 
@@ -48,28 +55,47 @@ class DispatchStateServiceTest {
     }
 
     // [시나리오] 두 스레드가 동시에 선점 → 조건부 UPDATE는 한 쪽만 1행
-    // → 0행이면 조회·이력 없이 empty, 1행이면 스냅샷 + DISPATCH_START 이력
+    // → 0행이면 스냅샷 재조회·이력 없이 empty, 1행이면 스냅샷 + 반환 계약 + DISPATCH_START 이력
     @Test
-    @DisplayName("claim: 선점 0행이면 empty, 조회·이력 없음")
+    @DisplayName("claim: 선점 0행이면 empty, 스냅샷 재조회·이력 없음")
     void claim_casFails_returnsEmpty() {
-        given(notificationRepositoryPort.tryStartProcessing(1L)).willReturn(false);
+        given(notificationRepositoryPort.findById(1L)).willReturn(Optional.of(notification));
+        given(notificationRepositoryPort.tryStartProcessingFrom(eq(1L), anyString(), anyInt(), any()))
+                .willReturn(false);
 
         assertThat(dispatchStateService.claim(1L)).isEmpty();
 
-        verify(notificationRepositoryPort, never()).findById(any());
+        // 되돌릴 상태를 읽는 1회만 허용한다. 선점에 실패했으면 그 뒤 재조회도 이력도 없다.
+        verify(notificationRepositoryPort, times(1)).findById(1L);
         verify(notificationLogRepositoryPort, never()).save(any());
     }
 
     @Test
-    @DisplayName("claim: 선점 1행이면 스냅샷 반환 + DISPATCH_START 이력")
-    void claim_casSucceeds_returnsSnapshotAndLogs() {
-        given(notificationRepositoryPort.tryStartProcessing(1L)).willReturn(true);
+    @DisplayName("claim: 이미 대기 상태가 아니면 선점을 시도조차 하지 않는다")
+    void claim_notWaiting_doesNotAttempt() {
+        notification.markSent();
         given(notificationRepositoryPort.findById(1L)).willReturn(Optional.of(notification));
 
-        assertThat(dispatchStateService.claim(1L)).contains(notification);
+        assertThat(dispatchStateService.claim(1L)).isEmpty();
 
+        verify(notificationRepositoryPort, never()).tryStartProcessingFrom(any(), anyString(), anyInt(), any());
+    }
+
+    @Test
+    @DisplayName("claim: 선점 1행이면 스냅샷과 '되돌릴 상태'를 함께 돌려준다")
+    void claim_casSucceeds_returnsSnapshotAndLogs() {
+        given(notificationRepositoryPort.findById(1L)).willReturn(Optional.of(notification));
+        given(notificationRepositoryPort.tryStartProcessingFrom(eq(1L), anyString(), anyInt(),
+                eq(NotificationStatus.PENDING))).willReturn(true);
+
+        var claimed = dispatchStateService.claim(1L).orElseThrow();
+
+        assertThat(claimed.snapshot()).isEqualTo(notification);
+        // 반환 계약은 추정이 아니라 선점 전에 읽은 값이다
+        assertThat(claimed.workItem().previousStatus()).isEqualTo(NotificationStatus.PENDING);
         ArgumentCaptor<NotificationLog> logCaptor = ArgumentCaptor.forClass(NotificationLog.class);
         verify(notificationLogRepositoryPort).save(logCaptor.capture());
+        assertThat(logCaptor.getValue().getFromStatus()).isEqualTo(NotificationStatus.PENDING);
         assertThat(logCaptor.getValue().getToStatus()).isEqualTo(NotificationStatus.PROCESSING);
         assertThat(logCaptor.getValue().getReason()).isEqualTo("DISPATCH_START");
     }
@@ -98,7 +124,8 @@ class DispatchStateServiceTest {
     @Test
     @DisplayName("finish 1행(실패): DispatchHistory.failure(code) + PROCESSING→RETRYING 로그")
     void finish_applied_failure_recordsHistoryAndTransition() {
-        notification.markRetrying("CHANNEL_UNAVAILABLE");
+        notification.applyRetryableFailure(NotificationStatus.RETRYING, null, "CHANNEL_UNAVAILABLE",
+                LocalDateTime.of(2026, 9, 23, 3, 1));
         given(notificationRepositoryPort.tryFinishProcessing(notification)).willReturn(true);
 
         dispatchStateService.finish(notification, 1, "CHANNEL_UNAVAILABLE");

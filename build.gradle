@@ -38,6 +38,7 @@ dependencies {
 }
 
 tasks.named('test') {
+	dependsOn tasks.named('bootJar')
 	useJUnitPlatform()
 	testLogging {
 		events "passed", "failed", "skipped"

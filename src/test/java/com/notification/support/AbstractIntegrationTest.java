@@ -4,6 +4,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.annotation.DirtiesContext;
 import org.testcontainers.containers.MySQLContainer;
 
 /**
@@ -18,6 +19,9 @@ import org.testcontainers.containers.MySQLContainer;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
+// DB는 공유하지만 설정별 컨텍스트/스케줄러/Mock은 별개다. 클래스 종료 시 모두 닫아 간섭을 막는다.
+// 이 베이스의 공유 DB 테스트는 병렬 실행하지 않는다 (junit-platform.properties).
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_CLASS)
 public abstract class AbstractIntegrationTest {
 
     static final MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0")

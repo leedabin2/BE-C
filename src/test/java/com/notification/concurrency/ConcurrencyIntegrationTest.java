@@ -258,7 +258,7 @@ class ConcurrencyIntegrationTest extends AbstractIntegrationTest {
     void register_concurrent_onlyOneNotificationSaved() throws InterruptedException {
         RegisterNotificationCommand command = new RegisterNotificationCommand(
                 42L, NotificationType.PAYMENT_CONFIRMED, NotificationChannel.EMAIL,
-                "user@test.com", "evt-idem-001", 100L, "PAYMENT", "{}", null);
+                "user@test.com", "evt-idem-001", 100L, "PAYMENT", "{}", null, null);
 
         int threadCount = 10;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
@@ -311,7 +311,7 @@ class ConcurrencyIntegrationTest extends AbstractIntegrationTest {
     void register_afterCommit_eventHandlerDispatchesExactlyOnce() {
         RegisterNotificationCommand command = new RegisterNotificationCommand(
                 42L, NotificationType.PAYMENT_CONFIRMED, NotificationChannel.EMAIL,
-                "user@test.com", "evt-outbox-001", 100L, "PAYMENT", "{}", null);
+                "user@test.com", "evt-outbox-001", 100L, "PAYMENT", "{}", null, null);
 
         log.info("[Outbox 테스트] register() 호출");
         RegisterNotificationResult result = registerUseCase.register(command);

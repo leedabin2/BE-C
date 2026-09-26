@@ -21,7 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 시나리오별 동작을 제어할 수 있도록 설계됐다.
  * - 기본: 즉시 성공
  * - setFailCount(n): n회 RetryableException 발생 후 성공
- * - setThrowTimeout(true): NonRetryableException(타임아웃) 발생
+ * - setThrowTimeout(true): delivery unknown timeout 발생
  */
 @Slf4j
 @Primary
@@ -60,8 +60,8 @@ public class TestChannelSenderAdapter implements ChannelSenderPort {
         }
 
         if (throwTimeout) {
-            log.warn("[TestChannel] NonRetryable 예외 발생 id={} thread={}", notification.getId(), thread);
-            throw new NonRetryableChannelException(ChannelFailureCode.CHANNEL_UNAVAILABLE);
+            log.warn("[TestChannel] Timeout 예외 발생 id={} thread={}", notification.getId(), thread);
+            throw new RetryableChannelException(ChannelFailureCode.CHANNEL_TIMEOUT);
         }
 
         if (failCount.get() > 0) {
@@ -79,7 +79,7 @@ public class TestChannelSenderAdapter implements ChannelSenderPort {
         this.failCount.set(count);
     }
 
-    /** true 설정 시 NonRetryableException(타임아웃 모사) 발생 */
+    /** true 설정 시 delivery unknown RetryableException(타임아웃 모사) 발생 */
     public void setThrowTimeout(boolean throwTimeout) {
         this.throwTimeout = throwTimeout;
     }

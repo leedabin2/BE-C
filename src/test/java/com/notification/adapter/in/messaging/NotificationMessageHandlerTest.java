@@ -37,12 +37,12 @@ class NotificationMessageHandlerTest {
 
     private NotificationMessage message() {
         return new NotificationMessage(1L, NotificationType.PAYMENT_CONFIRMED, NotificationChannel.EMAIL,
-                "user@example.com", "pay-attempt-4412", 101L, "PAYMENT", "{\"amount\":1000}", SCHEDULED_AT);
+                "user@example.com", "pay-attempt-4412", 101L, "PAYMENT", "{\"amount\":1000}", SCHEDULED_AT, null);
     }
 
     private NotificationRequest sameRequestOverHttp() {
         return new NotificationRequest(1L, NotificationType.PAYMENT_CONFIRMED, NotificationChannel.EMAIL,
-                "user@example.com", "pay-attempt-4412", 101L, "PAYMENT", "{\"amount\":1000}", SCHEDULED_AT);
+                "user@example.com", "pay-attempt-4412", 101L, "PAYMENT", "{\"amount\":1000}", SCHEDULED_AT, null);
     }
 
     @Test

@@ -50,14 +50,19 @@ public record NotificationRequest(
         @Size(max = 65535, message = "contentData는 65535자를 초과할 수 없습니다.")
         String contentData,
 
-        @Schema(description = "예약 발송 시각 (null이면 즉시)", example = "2025-06-01T09:00:00")
-        LocalDateTime scheduledAt
+        @Schema(description = "UTC 예약 발송 시각 (오프셋 없는 ISO 형식, null이면 즉시). 한국 09시는 UTC 00시로 전달",
+                example = "2026-09-23T00:00:00")
+        LocalDateTime scheduledAt,
+
+        @Schema(description = "발송 기한(UTC). 이 시각 이후에는 발송을 시작하지 않는다", example = "2026-09-26T10:00:00")
+        @JsonDeserialize(using = JsonStringDeserializer.class)
+        LocalDateTime expiresAt
 ) {
 
     /** HTTP DTO → Command. 인그레스는 변환만 한다. 메시징 어댑터도 같은 모양의 toCommand()를 갖는다. */
     public RegisterNotificationCommand toCommand() {
         return new RegisterNotificationCommand(
                 receiverId, notificationType, channel, channelTarget,
-                eventId, referenceId, referenceType, contentData, scheduledAt);
+                eventId, referenceId, referenceType, contentData, scheduledAt, expiresAt);
     }
 }

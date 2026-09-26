@@ -1,0 +1,25 @@
+services:
+  # `app`은 docker-compose.yml의 8080 공개 인스턴스다. 아래 두 인스턴스는
+  # HTTP 부하 수신 대상이 아니라, 동일 MySQL queue를 함께 claim하는 worker 역할이다.
+  # 세 컨테이너 모두 같은 코드/설정을 실행하므로 scheduler와 worker도 모두 동작한다.
+  worker-b:
+    image: be-c-app
+    env_file:
+      - .env
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?serverTimezone=UTC&characterEncoding=UTF-8
+      NOTIFICATION_NODE_ID: worker-b
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  worker-c:
+    image: be-c-app
+    env_file:
+      - .env
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?serverTimezone=UTC&characterEncoding=UTF-8
+      NOTIFICATION_NODE_ID: worker-c
+    depends_on:
+      mysql:
+        condition: service_healthy

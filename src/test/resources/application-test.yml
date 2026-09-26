@@ -5,10 +5,11 @@ spring:
       #    스케줄러가 한 번도 실행되지 않는다. 회수 경로가 통째로 미검증 상태가 된다.
       mode: always
   jpa:
-    # create-drop으로 엔티티 테이블을 먼저 만든 뒤 schema.sql(shedlock·FK)을 실행한다
+    # 공유 Testcontainers DB에서 컨텍스트별 create-drop은 FK가 남은 notification을 먼저 drop해
+    # 종료 오류를 만들고 다음 컨텍스트의 DDL과 섞인다. update로 한 번 만든 뒤 각 테스트가 데이터를 정리한다.
     defer-datasource-initialization: true
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect

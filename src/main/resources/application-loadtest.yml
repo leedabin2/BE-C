@@ -1,0 +1,5 @@
+notification:
+  # S5에서만 사용한다. compose override가 2,000ms 등으로 덮어쓴다.
+  loadtest:
+    sender:
+      delay-ms: 0

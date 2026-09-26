@@ -5,6 +5,10 @@ spring:
     password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
+      # DATETIME/LocalDateTime 계약은 UTC. JVM 시간대와 무관하게 NOW()도 UTC로 고정한다.
+      data-source-properties:
+        connectionTimeZone: '+00:00'
+        forceConnectionTimeZoneToSession: true
       # 커넥션은 "트랜잭션이 열려 있는 동안"만 점유된다. 외부 발송 구간은 TX 밖이라 안 잡는다.
       # 그래서 워커 수(최대 50) > 커넥션 수(20)로 둔다. 다만 무한정은 아니다 —
       # 워커가 일제히 claim/finish를 치는 버스트에서는 워커 수만큼 동시 요구가 몰린다.
@@ -28,6 +32,9 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect
+        jdbc.time_zone: UTC
+        # LocalDateTime은 Timestamp/JVM 시간대를 거치지 않고 JDBC 4.2로 직접 전달한다.
+        type.java_time_use_direct_jdbc: true
         # format_sql: true
     # show-sql: true
     open-in-view: false
@@ -57,13 +64,58 @@ notification:
       read-ms: 30000
       write-ms: 30000
       round-trips: 7
+  policy:
+    # TYPE_V1(타입별 재시도 예산 + 기한) 활성화 스위치. 신규 EMAIL 행에만 적용된다.
+    # 구버전 worker가 TYPE_V1 행을 선점할 수 있는 동안에는 켜지 않는다 — 그 worker는 기한을 모른다.
+    # 꺼져 있으면 신규 행도 LEGACY_V0로 등록돼 기존 의미 그대로 동작한다. (재시도 정책 §5.7)
+    #
+    # 2026-09-25 활성화. 전제: (1) 컬럼은 전부 nullable이라 구버전 행/INSERT가 그대로 동작하고,
+    # (2) 기한 조건은 due 조회·선점 CAS·호출 직전 검사·만료 정리 네 경로에 모두 들어갔다.
+    # 롤백은 이 값을 false로 되돌리면 되지만, 이미 TYPE_V1로 등록된 행은 기한을 그대로 유지한다.
+    type-v1-enabled: true
+  provider:
+    # 제공자 scope 식별자 = provider + 계정/자격증명 + endpoint. 실제 업체 연결 전까지는 단일 scope다.
+    # EMAIL 하나로 묶으면 장애 난 업체 때문에 정상 업체까지 멈추므로, 업체가 늘면 scope도 나눈다.
+    scope: EMAIL:default
+    circuit:
+      # 연속 실패 기준이다. "최근 N건 실패율"(sliding window)이 아니므로 그렇게 부르지 않는다.
+      failure-threshold: 5
+      open-seconds: 30        # 첫 차단 시간. 재오픈될수록 2배씩 늘린다
+      max-backoff-step: 5     # 30초 → 최대 16분
+      probe-lease-seconds: 60 # 탐침 소유권 유효 시간. 소유자가 죽으면 이 뒤에 인수된다
+      hold-seconds: 30        # 차단으로 보류한 알림을 다시 집기까지의 대기
+  dispatch:
+    # 외부 호출을 시작하려면 최소 이만큼의 lease가 남아야 한다. 어댑터 최악 소요(215초) + 결과 반영 여유(5초).
+    # 큐에서 오래 기다린 작업이 "끝내지 못할 호출"을 시작해 회수본과 겹치는 것을 막는다.
+    # 기동 시 DispatchInvariantValidator가 최악 소요 이상인지, lease보다 작은지 검사한다.
+    min-remaining-lease-seconds: 220
   scheduler:
     retry:
-      fixed-delay-ms: 60000    # 재처리 주기: 1분 (nextRetryAt 최소 단위와 맞춤)
+      # due 여부는 DB의 next_retry_at/scheduled_at로 판정한다. poll 주기를 1분으로 두면
+      # 이미 due인 PENDING이 최대 1분 더 기다리고, batch-size=100이면 대량 backlog가 분당 100건으로 제한된다.
+      # 1초 poll은 "재시도 간격"이 아니라 DB due queue를 worker 수용량만큼 채우는 dispatcher 주기다.
+      # N대에서는 SKIP LOCKED가 실제 소유권을 나눈다. provider 전역 quota는 별도 limiter가 필요하다.
+      fixed-delay-ms: 1000
       batch-size: 100
+      # 슬롯이 비는 대로 같은 scan 안에서 다시 채운다. 이게 없으면 처리량이 "슬롯 수 / scan 주기"에 묶여,
+      # 워커가 이미 끝났는데도 다음 scan까지 노는 구간이 생긴다. 상한은 라운드 수와 시간 예산으로 둔다.
+      max-rounds: 20
+      round-budget-ms: 500
     stuck:
-      fixed-delay-ms: 300000   # 복구 주기: 5분
-      threshold-minutes: 10    # 10분 이상 PROCESSING이면 stuck 판정
+      # 회수 주기는 "만료를 얼마나 빨리 발견하는가"만 바꾼다. 발송 중인 작업을 빼앗지 않는 근거는
+      # 주기가 아니라 lease_until 조건이고, lease는 DispatchInvariantValidator가 지킨다(215초×2 ≤ 600초).
+      # 300초면 최악 발견 지연이 전체 회수 지연(lease 10분 + 발견 + backoff)의 1/3이라 줄일 가치가 크고,
+      # 30초 아래로는 이득이 거의 없이 ShedLock 단일 행 경합·재시도 폭주만 커진다.
+      fixed-delay-ms: 30000    # 복구 주기: 30초
+      threshold-minutes: 10    # 10분 이상 PROCESSING이면 stuck 판정 (= lease 길이)
+      batch-size: 100          # 한 batch가 볼 최대 행 수. batch마다 별도 짧은 TX로 커밋한다.
+      max-batches: 5           # 한 실행의 batch 상한. 100×5=500건까지 따라잡고 잔량은 다음 트리거로 넘긴다.
+      time-budget-ms: 2000     # 이 시간을 넘기면 새 batch를 시작하지 않는다. 실행 중 SQL을 끊는 타임아웃이 아니다.
+    expiry:
+      # 기한이 지난 대기 알림 정리. 발송하지 않고 상태만 종료한다. 회수와 같은 bounded 예산을 쓴다.
+      fixed-delay-ms: 30000
+    metrics:
+      fixed-delay-ms: 60000    # 클러스터 전체 due backlog/lease 상태를 1분마다 구조화 로그로 기록
 
 logging:
   level:

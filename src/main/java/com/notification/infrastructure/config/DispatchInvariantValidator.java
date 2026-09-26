@@ -31,6 +31,9 @@ public class DispatchInvariantValidator {
     @Value("${notification.scheduler.stuck.threshold-minutes:10}")
     private int stuckThresholdMinutes;
 
+    @Value("${notification.dispatch.min-remaining-lease-seconds:220}")
+    private int minRemainingLeaseSeconds;
+
     @PostConstruct
     void verify() {
         int worstCase = timeout.worstCaseSeconds();
@@ -43,7 +46,25 @@ public class DispatchInvariantValidator {
                     조치: 타임아웃을 줄이거나 notification.scheduler.stuck.threshold-minutes를 늘린다."""
                     .formatted(worstCase, MIN_SAFETY_FACTOR, threshold));
         }
-        log.info("발송 불변식 확인 — 최악 소요 {}초 < Stuck 임계 {}초 (여유 {}배)",
-                worstCase, threshold, threshold / Math.max(worstCase, 1));
+        // 호출 직전 방어가 요구하는 잔여 lease 예산도 같은 축에 있어야 의미가 있다.
+        // 최악 소요보다 작으면 "끝낼 수 없는 호출"을 그대로 통과시키고,
+        // lease 전체보다 크거나 같으면 갓 선점한 작업조차 매번 반환돼 아무것도 못 보낸다.
+        if (minRemainingLeaseSeconds < worstCase) {
+            throw new IllegalStateException("""
+                    발송 방어 불변식 위반: 필요 잔여 lease(%d초) < 발송 최악 소요(%d초).
+                    lease 안에 끝낼 수 없는 외부 호출을 시작하게 된다.
+                    조치: notification.dispatch.min-remaining-lease-seconds를 최악 소요 이상으로 올린다."""
+                    .formatted(minRemainingLeaseSeconds, worstCase));
+        }
+        if (minRemainingLeaseSeconds >= threshold) {
+            throw new IllegalStateException("""
+                    발송 방어 불변식 위반: 필요 잔여 lease(%d초) >= lease 길이(%d초).
+                    선점 직후에도 예산을 못 채워 모든 발송이 반환된다.
+                    조치: 예산을 줄이거나 notification.scheduler.stuck.threshold-minutes를 늘린다."""
+                    .formatted(minRemainingLeaseSeconds, threshold));
+        }
+
+        log.info("발송 불변식 확인 — 최악 소요 {}초 ≤ 호출 전 필요 잔여 {}초 < lease {}초 (여유 {}배)",
+                worstCase, minRemainingLeaseSeconds, threshold, threshold / Math.max(worstCase, 1));
     }
 }

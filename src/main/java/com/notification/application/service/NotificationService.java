@@ -22,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalDateTime;
 import java.util.Optional;
 
 /**
@@ -43,6 +44,7 @@ public class NotificationService implements RegisterNotificationUseCase {
     private final NotificationRepositoryPort notificationRepositoryPort;
     private final NotificationEventPublisherPort eventPublisherPort;
     private final NotificationLogRepositoryPort notificationLogRepositoryPort;
+    private final NotificationPolicyAssigner policyAssigner;
 
     // self-injection: DataIntegrityViolationException catch 후 새 트랜잭션으로 조회하기 위해 프록시 경유
     // @Lazy로 순환 참조 해결 (자기 자신을 주입할 때 발생하는 BeanCurrentlyInCreationException 방지)
@@ -93,6 +95,11 @@ public class NotificationService implements RegisterNotificationUseCase {
      */
     @Transactional
     public Notification insertPending(RegisterNotificationCommand command, String idempotencyKey) {
+        // 시간창은 앱 시계가 아니라 DB UTC 기준으로 확정한다. 이 TX 안에서 정해 그대로 저장한다.
+        LocalDateTime now = notificationRepositoryPort.currentTime();
+        NotificationPolicyAssigner.AssignedPolicy policy = policyAssigner.assign(
+                command.notificationType(), command.channel(), now, command.scheduledAt(), command.expiresAt());
+
         Notification notification = Notification.builder()
                 .receiverId(command.receiverId())
                 .channelTarget(command.channelTarget())
@@ -104,6 +111,9 @@ public class NotificationService implements RegisterNotificationUseCase {
                 .contentData(command.contentData())
                 .idempotencyKey(idempotencyKey)
                 .scheduledAt(command.scheduledAt())
+                .policyVersion(policy.policyVersion())
+                .eligibleAt(policy.eligibleAt())
+                .expiresAt(policy.expiresAt())
                 .build();
 
         // save()가 아닌 이유: save()는 flush를 트랜잭션 끝까지 미뤄 제약 위반 시점을 통제할 수 없다

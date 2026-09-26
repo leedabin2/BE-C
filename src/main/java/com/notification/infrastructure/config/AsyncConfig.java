@@ -65,18 +65,28 @@ public class AsyncConfig {
     /**
      * 배치 재처리 발송. 스케줄러 전용. 목표는 처리량 최대화.
      *
-     * CallerRunsPolicy: 큐가 꽉 차면 제출자(scheduling-*)가 직접 실행한다 → 제출 속도가
-     * 저절로 느려지는 백프레셔. 버리지 않는다.
-     * 용량(50+200=250) > 배치 크기(100)라 평상시엔 발동하지 않는 안전판이다.
+     * AbortPolicy: 받을 수 없으면 scheduler가 직접 외부 I/O를 하지 않고 거절 예외를 받는다.
+     * scheduler는 그 claim을 즉시 원래 PENDING/RETRYING으로 되돌린다. 다음 scheduler cycle이 다시
+     * 집을 수 있으므로 유실이 아니며, CallerRuns처럼 scheduling-* 스레드가 긴 발송에 묶이지 않는다.
+     *
+     * <p><b>큐를 200에서 15로 줄인 이유(P0-c).</b> 메모리 큐에 쌓인 작업은 이미 DB에서 PROCESSING으로
+     * 선점된 상태다. 즉 시작도 못 한 채 lease를 태우고, 대기가 길어지면 다른 노드가 회수해 중복 발송의
+     * 씨앗이 된다. 적체는 메모리가 아니라 <b>DB에 두는 편이 안전하다</b> — DB에 남으면 여유 있는
+     * 아무 노드나 가져갈 수 있고 lease도 소모하지 않는다.
+     *
+     * <p>그렇다고 0으로 두지는 않았다. 큐가 없으면 worker가 막 끝나 스레드를 반납하는 찰나에 들어온
+     * 제출이 그대로 거절돼(handoff 경합), 여유가 있는데도 보상 TX가 쏟아진다. 스레드 수와 같은 15칸이면
+     * 최악 대기가 "15건 × 건당 발송 시간"이라 lease(600초) 대비 충분히 짧고, 그래도 늦어진 건은
+     * 호출 직전 lease 예산 검사가 걸러낸다. 실행 슬롯 = 스레드 15 + 큐 15 = 30.
      */
     @Bean(name = "batchExecutor")
-    public Executor batchExecutor() {
+    public ThreadPoolTaskExecutor batchExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(15);
-        executor.setMaxPoolSize(30);
-        executor.setQueueCapacity(200);
+        executor.setMaxPoolSize(15);
+        executor.setQueueCapacity(15);
         executor.setThreadNamePrefix("notification-batch-");
-        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.initialize();

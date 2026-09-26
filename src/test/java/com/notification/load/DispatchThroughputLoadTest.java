@@ -53,8 +53,15 @@ class DispatchThroughputLoadTest extends AbstractIntegrationTest {
     /** 총 요청 수. 전부 다른 eventId라 멱등성으로 합쳐지지 않는다. */
     private static final int TOTAL = 1000;
 
-    /** 동시에 출발하는 클라이언트 스레드 수. */
-    private static final int CONCURRENCY = 1000;
+    /**
+     * 동시에 출발하는 클라이언트 수.
+     *
+     * 이 테스트의 목적은 노트북의 Tomcat accept queue 한계를 재는 것이 아니라,
+     * SMTP 지연이 접수 응답으로 전파되지 않는지를 보는 것이다. 1,000개 OS 스레드를
+     * 한 번에 기동하면 클라이언트·Tomcat·DB 접수 큐 자체가 포화돼 p99가 왜 느린지
+     * 구분할 수 없으므로, 요청 수와 접수 동시성은 분리한다.
+     */
+    private static final int CONCURRENCY = 100;
 
     /** 외부 SMTP 응답 지연(ms). */
     private static final long SMTP_DELAY_MS = 2000;
@@ -77,12 +84,12 @@ class DispatchThroughputLoadTest extends AbstractIntegrationTest {
     }
 
     @Test
-    @DisplayName("HTTP 1000건 동시 요청 → SMTP 2초 → 전건 발송 완료까지 측정")
+    @DisplayName("HTTP 1000건·동시 100 요청 → SMTP 2초 → 전건 발송 완료까지 측정")
     void 동시_HTTP_요청부터_발송_완료까지_측정한다() throws InterruptedException {
         long[] latencyMs = new long[TOTAL];
         AtomicInteger httpError = new AtomicInteger();
         ExecutorService clients = Executors.newFixedThreadPool(CONCURRENCY);
-        CountDownLatch ready = new CountDownLatch(TOTAL);
+        CountDownLatch ready = new CountDownLatch(CONCURRENCY);
         CountDownLatch start = new CountDownLatch(1);
         CountDownLatch done  = new CountDownLatch(TOTAL);
 
@@ -129,7 +136,8 @@ class DispatchThroughputLoadTest extends AbstractIntegrationTest {
                     .pollInterval(Duration.ofSeconds(1))
                     .until(() -> notificationJpaRepository.findAll().stream()
                             .noneMatch(n -> n.getStatus() == NotificationStatus.PENDING
-                                         || n.getStatus() == NotificationStatus.PROCESSING));
+                                         || n.getStatus() == NotificationStatus.PROCESSING
+                                         || n.getStatus() == NotificationStatus.RETRYING));
         } finally {
             // 타임아웃으로 끝나도 측정값은 봐야 한다. 어디까지 갔는지가 곧 진단이다
             report(latencyMs, registerMs, (System.nanoTime() - t1) / 1_000_000,
@@ -139,10 +147,19 @@ class DispatchThroughputLoadTest extends AbstractIntegrationTest {
 
         assertThat(httpError.get()).as("HTTP 실패 건수").isZero();
         assertThat(notificationJpaRepository.count()).isEqualTo(TOTAL);
-        // ★ 핵심: SMTP 2초가 HTTP 응답을 막지 않아야 한다 (F1-1)
+        assertThat(notificationJpaRepository.countByStatusIn(java.util.List.of(NotificationStatus.SENT)))
+                .as("무장애 Mock의 전건 SENT").isEqualTo(TOTAL);
+        assertThat(channelSender.getSendCallCount()).as("이 컨텍스트의 실제 외부 호출 수").isEqualTo(TOTAL);
+        assertThat(channelSender.getRecords()).extracting(TestChannelSenderAdapter.SendRecord::notificationId)
+                .doesNotHaveDuplicates().containsExactlyInAnyOrderElementsOf(
+                        notificationJpaRepository.findAll().stream().map(n -> n.getId()).toList());
+        // ★ 핵심: SMTP 2초가 HTTP 응답을 막지 않아야 한다 (F1-1).
+        // DB 등록 경합의 p99는 이 노트북/컨테이너 자원에 따라 달라진다. “SMTP의 절반”은
+        // 제품 SLO가 아니라 임의 수치이므로, 여기서는 직접 SMTP 호출(최소 2초 대기)을 구별하는 경계만 둔다.
+        // 고정 p99 SLO는 S5 nGrinder의 기준선 측정 뒤 정한다.
         assertThat(percentile(latencyMs, 99))
-                .as("HTTP p99는 SMTP 지연(%dms)의 절반 미만이어야 한다", SMTP_DELAY_MS)
-                .isLessThan(SMTP_DELAY_MS / 2);
+                .as("HTTP p99는 SMTP 지연(%dms)을 기다리면 안 된다", SMTP_DELAY_MS)
+                .isLessThan(SMTP_DELAY_MS);
     }
 
     private HttpEntity<String> request(int seq) {
@@ -186,7 +203,7 @@ class DispatchThroughputLoadTest extends AbstractIntegrationTest {
                 ╠═════════════════ 발송 (SMTP) ═══════════════════════════
                 ║ 즉시 발송 착수 : {}건 / {}건  (나머지는 스케줄러 회수)
                 ║ 발송 완료까지  : {}ms  →  {} TPS
-                ║ SENT {} · FAILED {} · 채널호출 {}회 (중복 {}회)
+                ║ SENT {} · FAILED {} · 채널호출 {}회 (호출-요청 차이 {}회)
                 ╠═════════════════════════════════════════════════════════
                 ║ 전체(요청~완료) : {}ms
                 ╚═════════════════════════════════════════════════════════""",

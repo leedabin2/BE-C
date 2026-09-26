@@ -26,6 +26,8 @@ public enum ChannelFailureCode {
      * <b>재시도하면 중복 발송이 될 수 있다.</b> 그래도 재시도하는 이유는 유실이 중복보다 나쁘기 때문이다.
      */
     CHANNEL_TIMEOUT(true, true),
+    /** worker가 lease 시간 안에 finish하지 못했다. 외부 발송 결과가 불명이라 재시도 시 중복 가능성이 있다. */
+    PROCESSING_STUCK(true, true),
 
     // ── 재시도 불가 · 영구 오류 ───────────────────────────────────────
     /** 잘못된 수신자(주소 형식 오류, SMTP 550/553). */

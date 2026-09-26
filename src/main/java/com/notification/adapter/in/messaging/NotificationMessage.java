@@ -22,12 +22,14 @@ public record NotificationMessage(
         Long referenceId,
         String referenceType,
         String contentData,
-        LocalDateTime scheduledAt
+        LocalDateTime scheduledAt,
+        /** 생산자가 지정한 절대 발송 기한. 없으면 타입별 기본 기한을 쓴다. */
+        LocalDateTime expiresAt
 ) {
 
     public RegisterNotificationCommand toCommand() {
         return new RegisterNotificationCommand(
                 receiverId, notificationType, channel, channelTarget,
-                eventId, referenceId, referenceType, contentData, scheduledAt);
+                eventId, referenceId, referenceType, contentData, scheduledAt, expiresAt);
     }
 }

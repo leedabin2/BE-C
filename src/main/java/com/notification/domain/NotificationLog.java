@@ -51,7 +51,7 @@ public class NotificationLog {
         this.fromStatus = fromStatus;
         this.toStatus = toStatus;
         this.reason = reason;
-        this.createdAt = LocalDateTime.now();
+        this.createdAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public static NotificationLog of(Long notificationId,

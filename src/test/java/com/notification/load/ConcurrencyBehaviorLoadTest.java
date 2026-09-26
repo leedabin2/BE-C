@@ -56,7 +56,12 @@ class ConcurrencyBehaviorLoadTest extends AbstractIntegrationTest {
     private static final int TOTAL_REQUESTS = UNIQUE + DUP_KEYS * DUP_PER_KEY;
     private static final int EXPECTED_ROWS = UNIQUE + DUP_KEYS;
 
-    private static final int CLIENTS = 200;
+    /**
+     * 총량 1만과 HTTP 동시성은 분리한다. 200개는 이 노트북의 Tomcat/DB 접수 용량을 넘겨
+     * 503을 의도적으로 만들었고, 그때는 "정상 무장애 발송 1회"를 검증하는 테스트가 아니다.
+     * 과부하 임계·503 호출자 재시도는 S5 nGrinder에서 별도 측정한다.
+     */
+    private static final int CLIENTS = 100;
     private static final Duration TIMEOUT = Duration.ofMinutes(5);
 
     @Autowired TestRestTemplate restTemplate;
@@ -95,7 +100,8 @@ class ConcurrencyBehaviorLoadTest extends AbstractIntegrationTest {
         long t1 = System.nanoTime();
         Awaitility.await("전건 발송 완료").atMost(TIMEOUT).pollInterval(Duration.ofSeconds(1))
                 .until(() -> notificationJpaRepository.countByStatusIn(
-                        List.of(NotificationStatus.PENDING, NotificationStatus.PROCESSING)) == 0);
+                        List.of(NotificationStatus.PENDING, NotificationStatus.PROCESSING,
+                                NotificationStatus.RETRYING)) == 0);
         long dispatchMs = (System.nanoTime() - t1) / 1_000_000;
 
         report(registerMs, dispatchMs, httpError.get());
@@ -103,8 +109,14 @@ class ConcurrencyBehaviorLoadTest extends AbstractIntegrationTest {
         assertThat(httpError.get()).as("HTTP 실패").isZero();
         // ★ F3-1·F3-2: 같은 eventId 100건이 동시에 와도 행은 1개
         assertThat(notificationJpaRepository.count()).as("중복 제거 후 행 수").isEqualTo(EXPECTED_ROWS);
-        // ★ F3-1: 알림 1건당 발송은 정확히 1회
-        assertThat(channelSender.getRecords()).as("채널 호출 수").hasSize(EXPECTED_ROWS);
+        assertThat(notificationJpaRepository.countByStatusIn(List.of(NotificationStatus.SENT)))
+                .as("무장애 Mock의 전건 SENT").isEqualTo(EXPECTED_ROWS);
+        // ★ F3-1: 이 시나리오의 각 DB 작업은 채널까지 정확히 한 번만 도달한다.
+        assertThat(channelSender.getRecords()).as("채널 호출 수").hasSize(EXPECTED_ROWS)
+                .extracting(SendRecord::notificationId)
+                .doesNotHaveDuplicates()
+                .containsExactlyInAnyOrderElementsOf(notificationJpaRepository.findAll().stream()
+                        .map(Notification::getId).toList());
     }
 
     private void submit(ExecutorService pool, CountDownLatch start, CountDownLatch done,
