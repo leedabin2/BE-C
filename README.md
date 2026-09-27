@@ -2,6 +2,10 @@
 
 > 수강 신청 완료, 결제 확정 등 비즈니스 이벤트 발생 시 이메일 또는 인앱 알림을 발송하는 백엔드 시스템입니다.
 
+> **현재 구조부터 읽기:** [과제 C 아키텍처 통합 해설](ARCHITECTURE-GUIDE.md) — N대의 워커·스케줄러, 동기/비동기, 재시도·lease·지터·백로그, 실무 출처, 구현 한계와 테스트를 한 문서로 정리했습니다. 아래의 일부 설명은 이전 설계 단계의 기록입니다.
+
+핵심 문서: [인터뷰 런북](docs/INTERVIEW-RUNBOOK.md) · [재시도 정책](docs/design/04-retry-policy.md) · [요구사항](docs/PRD.md) · [다음 작업](docs/PLAN.md). 중복 상세 설계·용어집·과거 검토 문서는 정리하고 통합 해설을 기준으로 관리합니다.
+
 ---
 
 ## 목차
@@ -82,7 +86,7 @@ src/main/java/com/notification/
 
 **"알림 처리 실패가 비즈니스 트랜잭션에 영향을 주어서는 안 된다"**
 
-결제 서버와 알림 서버가 분리된 구조에서 결제 서버가 알림 서버에 이벤트를 전달하다가 서버 종료나 네트워크 단절이 발생하면 메시지가 유실되고, 알림 발송 기록도 없고 재시도도 되지 않습니다. 이 문제를 해결하기 위해 **Transactional Outbox Pattern**을 적용했습니다.
+현재는 **알림 DB를 영속 작업 큐로 사용**하여 접수 커밋 이후 발송 실패·실행 누락을 복구합니다. 결제 서버가 결제를 커밋한 뒤 알림 등록 전에 종료되는 구간까지 보호하려면 결제 측 Transactional Outbox 등 영속 전달 설계가 필요합니다. **생산자 Outbox와 실제 메시지 브로커는 이 저장소에 구현되어 있지 않습니다.**
 
 > 참고: [트랜잭셔널 아웃박스 패턴의 실제 구현 사례 - 29CM](https://medium.com/@greg.shiny82/%ED%8A%B8%EB%9E%9C%EC%9E%AD%EC%85%94%EB%84%90-%EC%95%84%EC%9B%83%EB%B0%95%EC%8A%A4-%ED%8C%A8%ED%84%B4%EC%9D%98-%EC%8B%A4%EC%A0%9C-%EA%B5%AC%ED%98%84-%EC%82%AC%EB%A1%80-29cm-0f822fc23edb)
 
@@ -232,6 +236,9 @@ docker-compose up --build -d
 | retry_count | INT | 재시도 횟수 (최대 3) |
 | next_retry_at | DATETIME | 다음 재시도 예정 시각 |
 | failure_reason | VARCHAR | 최종 실패 사유 코드 |
+| processing_token | VARCHAR(36) | PROCESSING 작업 소유자 UUID (늦은 워커 fencing) |
+| claimed_at | DATETIME | 작업 선점 시각 |
+| lease_until | DATETIME | 소유권 만료 시각 |
 | is_read | BOOLEAN | 읽음 여부 (IN_APP 전용) |
 | scheduled_at | DATETIME | 예약 발송 시각 (NULL이면 즉시) |
 | created_at | DATETIME | 생성 시각 |
@@ -326,14 +333,17 @@ PROCESSING
                             │
                             ├─ 조건부 UPDATE tryStartProcessing()
                             │   WHERE status IN ('PENDING','RETRYING')
-                            │   → PROCESSING (원자적, 1개 스레드만 성공)
+                            │   → PROCESSING + UUID token + lease_until 기록 → 커밋
                             │   다른 스레드가 선점했으면 → 스킵
                             │
                             ├─ channelSenderPort.send()
                             │
-                            ├─ 성공 → SENT
-                            ├─ RetryableException → RETRYING + 지수 백오프
-                            └─ NonRetryableException → FAILED
+                            └─ [TX-B] DispatchStateService.finish()
+                                조건부 UPDATE WHERE status='PROCESSING' AND processing_token=:token
+                                ├─ 성공 → SENT
+                                ├─ RetryableException → RETRYING + 지수 백오프
+                                ├─ NonRetryableException → FAILED
+                                └─ 0행(복구/새 소유자가 먼저 처리) → LATE_RESULT_IGNORED 기록
 
 [1분마다] retryScheduler
     └─ PENDING/RETRYING 중
@@ -342,12 +352,9 @@ PROCESSING
        두 조건 모두 만족하는 행만 SKIP LOCKED로 조회 → dispatch() 재처리
 
 [5분마다] stuckRecoveryScheduler
-    └─ 10분 이상 PROCESSING인 알림 조회
-       → 조건부 UPDATE (status='PROCESSING' AND updated_at <= threshold)
-       → PENDING 복구 (retry_count = 0 초기화) → 다음 스케줄러 사이클에서 재처리
-       ※ retry_count를 초기화하는 이유: stuck은 발송 시도 자체가 완료되지
-         않은 상태(외부로 실제 요청이 나갔는지조차 불확실)이므로 처음부터
-         다시 시도하는 것이 맞다고 판단함.
+    └─ lease_until이 지난 PROCESSING 알림 조회
+       → 조건부 UPDATE (status='PROCESSING' AND token 일치 AND lease 만료)
+       → Stuck도 실패 1회: RETRYING(백오프) 또는 3회째 FAILED(PROCESSING_STUCK)
 ```
 
 ### 재시도 정책 (지수 백오프)
@@ -384,13 +391,13 @@ PROCESSING
 | 방어 단계 | 메커니즘 |
 |-----------|---------|
 | 조회 단계 | SKIP LOCKED — 다른 인스턴스가 잠금 획득한 행 건너뜀 |
-| 처리 시작 | 조건부 UPDATE (`WHERE status IN ('PENDING','RETRYING')`) — 1개 인스턴스만 PROCESSING 전환 성공 |
-| Stuck 복구 | 조건부 UPDATE (`WHERE status='PROCESSING' AND updated_at <= threshold`) — 이미 SENT된 행은 0행 업데이트로 안전 스킵 |
+| 처리 시작 | 조건부 UPDATE + `processing_token`/`lease_until` 기록 — 1개 인스턴스만 PROCESSING 전환 성공 |
+| 결과 반영·Stuck 복구 | token과 lease를 포함한 조건부 UPDATE — ABA 및 이미 완료된 행을 0행으로 안전 스킵 |
 | 스케줄러 실행 | ShedLock — 다중 인스턴스 중 1개에서만 스케줄러 실행 |
 
 > **ShedLock 한계**: 스케줄러를 실행 중이던 서버가 갑자기 꺼지면, 다음 서버가 스케줄러를 이어받을 때까지 최대 `lockAtMostFor` 시간만큼 기다려야 합니다. 이 공백을 줄이려면 `lockAtMostFor`을 스케줄 주기보다 살짝 짧게 설정하는 것이 좋습니다. 예를 들어 이 코드에서는 60초 주기에 `lockAtMostFor = 55s`로 설정해, 서버가 죽어도 55초 후 다른 인스턴스가 바로 이어받을 수 있도록 했습니다.
 
-> **발송 스레드가 꽉 찼을 때**: 비동기 발송을 처리하는 스레드 풀이 가득 차면 새 작업이 거부됩니다. 이때 Spring의 기본 동작으로 `RejectedExecutionException`이 발생하고, Spring의 `AsyncUncaughtExceptionHandler`가 이를 잡아서 로그로 남긴 뒤 종료합니다. 발송은 누락되지만 DB에 PENDING 상태로 남아 있어 1분 뒤 스케줄러가 다시 처리합니다.
+> **발송 스레드가 꽉 찼을 때**: realtime executor는 예외를 HTTP 스레드로 전파하지 않고 WARN만 남기며 제출을 거부합니다. `CallerRunsPolicy`를 쓰면 HTTP 스레드가 외부 발송을 직접 하게 되므로 금지합니다. 거부된 건은 이미 PENDING으로 커밋되어 있어 유실되지 않으며, 다음 스케줄러 주기에 회수됩니다.
 
 ### 최종 실패(FAILED) 시 처리
 
@@ -468,9 +475,11 @@ Mock으로 DB 의존성을 제거하고 서비스 로직만 검증합니다.
 | 시나리오 | 내용 |
 |---------|------|
 | **A. 서버 재시작** | PENDING으로만 저장하고 이벤트 발행 없이 → 스케줄러만으로 발송 완료 확인 |
-| **B. Stuck 복구** | DB에서 직접 `updated_at`을 20분 전으로 변경 → `recoverStuck()` 호출 → PENDING 복구 → 재발송 → SENT |
+| **B. Stuck 복구** | 만료 `lease_until` 설정 → `recoverStuck()` 호출 → RETRYING(실패 1회) → 재발송 → SENT |
+| **B-1. Lease fencing** | A claim → lease 회수 → B claim → A의 늦은 finish가 B token/상태를 덮지 못함 |
+| **B-2. Stuck 상한** | lease 만료 3회 반복 → `FAILED(PROCESSING_STUCK)` |
 | **C. 재시도** | 1회 일시 실패 → RETRYING → `next_retry_at` 과거로 조작 → 재발송 → SENT, DispatchHistory 2건 |
-| **D. NonRetryable** | 영구 실패 채널 오류 → 즉시 FAILED, retryCount=0, 스케줄러 재처리 대상 아님 |
+| **D. Timeout Unknown** | 응답 유실 타임아웃 → RETRYING. 제공자 멱등 키/조회 없이는 중복 가능성을 명시 |
 | **E. 최대 재시도** | 3회 연속 실패 → FAILED, DispatchHistory 3건, 이후 스케줄러 픽업 안 됨 |
 
 > **테스트 전략**: 스케줄러를 직접 실행하면 ShedLock이 10초 이상 락을 잡고 있어 테스트가 느려지기 때문에, 스케줄러 대신 `fetchPendingIds()` + `dispatch()`를 직접 호출해서 같은 동작을 재현했습니다. 또한 JPA는 엔티티를 저장할 때 `updated_at`을 자동으로 현재 시각으로 갱신하기 때문에, "10분 전에 처리가 멈춘 알림"처럼 과거 시각이 필요한 시나리오는 JdbcTemplate으로 DB 값을 직접 바꿔서 테스트했습니다.
