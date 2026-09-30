@@ -1,0 +1,11 @@
+spring:
+  # S4 forked JVM의 테스트 전용 프로필. DB/port/nodeId는 실행 명령이 덮어쓴다.
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+notification:
+  node-id: ${NOTIFICATION_NODE_ID:unknown}
+  multiprocess:
+    probe:
+      before-send-delay-ms: 0

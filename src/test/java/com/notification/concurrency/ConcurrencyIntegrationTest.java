@@ -258,7 +258,7 @@ class ConcurrencyIntegrationTest extends AbstractIntegrationTest {
     void register_concurrent_onlyOneNotificationSaved() throws InterruptedException {
         RegisterNotificationCommand command = new RegisterNotificationCommand(
                 42L, NotificationType.PAYMENT_CONFIRMED, NotificationChannel.EMAIL,
-                "user@test.com", "evt-idem-001", 100L, "PAYMENT", "{}", null);
+                "user@test.com", "evt-idem-001", 100L, "PAYMENT", "{}", null, null);
 
         int threadCount = 10;
         ExecutorService executor = Executors.newFixedThreadPool(threadCount);
@@ -294,6 +294,11 @@ class ConcurrencyIntegrationTest extends AbstractIntegrationTest {
         results.forEach(r -> distinctIds.add(r.id()));
         log.info("[멱등성 테스트] 반환된 notification id 집합: {}", distinctIds);
         assertThat(distinctIds).hasSize(1);
+
+        // F3-2: 경합에서 진 쪽도 실패가 아니라 "이미 접수됨"을 받아야 한다.
+        // 이 두 줄이 없어서 9건이 커넥션 풀 고갈로 죽는데도 테스트가 통과했다. (DECISIONS D-011)
+        assertThat(exceptionCount.get()).isZero();
+        assertThat(results).hasSize(threadCount);
     }
 
     // ── 시나리오 2: Transactional Outbox — 커밋 후 이벤트 발행 → 발송 검증 ──────
@@ -306,7 +311,7 @@ class ConcurrencyIntegrationTest extends AbstractIntegrationTest {
     void register_afterCommit_eventHandlerDispatchesExactlyOnce() {
         RegisterNotificationCommand command = new RegisterNotificationCommand(
                 42L, NotificationType.PAYMENT_CONFIRMED, NotificationChannel.EMAIL,
-                "user@test.com", "evt-outbox-001", 100L, "PAYMENT", "{}", null);
+                "user@test.com", "evt-outbox-001", 100L, "PAYMENT", "{}", null, null);
 
         log.info("[Outbox 테스트] register() 호출");
         RegisterNotificationResult result = registerUseCase.register(command);

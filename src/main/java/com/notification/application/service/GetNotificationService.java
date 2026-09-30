@@ -1,4 +1,5 @@
 package com.notification.application.service;
+// PRD: F1-2, F1-3 → docs/prd/F1.md
 
 import com.notification.application.port.in.GetNotificationUseCase;
 import com.notification.application.port.in.result.NotificationDetailResult;

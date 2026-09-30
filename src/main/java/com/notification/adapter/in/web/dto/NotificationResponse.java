@@ -1,4 +1,5 @@
 package com.notification.adapter.in.web.dto;
+// PRD: F1-1 → docs/prd/F1.md
 
 import com.notification.application.port.in.result.RegisterNotificationResult;
 import com.notification.domain.NotificationChannel;

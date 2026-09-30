@@ -1,0 +1,8 @@
+# S5 provider-latency/backlog 시나리오용 compose override.
+# 기본 docker-compose.yml과 함께만 사용한다. 기본 실행에는 적용되지 않는다.
+services:
+  app:
+    environment:
+      SPRING_PROFILES_ACTIVE: loadtest
+      # 외부 SMTP/FCM의 blocking 응답 시간을 모사한다. 실행 시 원하는 값으로 덮어쓴다.
+      NOTIFICATION_LOADTEST_SENDER_DELAY_MS: ${NOTIFICATION_LOADTEST_SENDER_DELAY_MS:-2000}

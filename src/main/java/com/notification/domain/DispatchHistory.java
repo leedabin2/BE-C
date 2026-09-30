@@ -1,4 +1,5 @@
 package com.notification.domain;
+// PRD: F2-3 → docs/prd/F2.md
 
 import jakarta.persistence.*;
 import lombok.AccessLevel;
@@ -57,7 +58,7 @@ public class DispatchHistory {
         this.status = status;
         this.errorMessage = errorMessage;
         this.dispatchedAt = dispatchedAt;
-        this.createdAt = LocalDateTime.now();
+        this.createdAt = LocalDateTime.now(java.time.ZoneOffset.UTC);
     }
 
     public static DispatchHistory success(Long notificationId, int attemptNumber) {
@@ -65,7 +66,7 @@ public class DispatchHistory {
                 .notificationId(notificationId)
                 .attemptNumber(attemptNumber)
                 .status(DispatchStatus.SENT)
-                .dispatchedAt(LocalDateTime.now())
+                .dispatchedAt(LocalDateTime.now(java.time.ZoneOffset.UTC))
                 .build();
     }
 
@@ -75,7 +76,7 @@ public class DispatchHistory {
                 .attemptNumber(attemptNumber)
                 .status(DispatchStatus.FAILED)
                 .errorMessage(errorMessage)
-                .dispatchedAt(LocalDateTime.now())
+                .dispatchedAt(LocalDateTime.now(java.time.ZoneOffset.UTC))
                 .build();
     }
 }

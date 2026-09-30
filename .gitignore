@@ -38,3 +38,11 @@ out/
 
 ### Env ###
 .env
+.env.*
+!.env.example
+
+### Local OS metadata ###
+.DS_Store
+
+### Docs (local only) ###
+docs/

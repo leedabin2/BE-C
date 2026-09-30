@@ -1,6 +1,7 @@
 package com.notification.resilience;
 
 import com.notification.application.port.out.NotificationRepositoryPort;
+import com.notification.application.service.DispatchStateService;
 import com.notification.application.service.NotificationDispatchService;
 import com.notification.domain.*;
 import com.notification.infrastructure.repository.DispatchHistoryJpaRepository;
@@ -17,6 +18,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -39,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ResilienceIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired NotificationDispatchService dispatchService;
+    @Autowired DispatchStateService dispatchStateService;
     @Autowired NotificationRepositoryPort notificationRepositoryPort;
     @Autowired NotificationJpaRepository notificationJpaRepository;
     @Autowired DispatchHistoryJpaRepository dispatchHistoryJpaRepository;
@@ -68,9 +71,14 @@ class ResilienceIntegrationTest extends AbstractIntegrationTest {
 
     private void setNextRetryAtInPast(Long id) {
         jdbcTemplate.update(
-                "UPDATE notification SET next_retry_at = ? WHERE id = ?",
-                LocalDateTime.now().minusSeconds(1), id
+                "UPDATE notification SET next_retry_at = DATE_SUB(NOW(6), INTERVAL 1 SECOND) WHERE id = ?", id
         );
+    }
+
+    /** lease는 MySQL NOW()를 기준으로 만들고 회수하므로, 테스트도 DB 시간을 사용한다. */
+    private void expireLease(Long id) {
+        jdbcTemplate.update(
+                "UPDATE notification SET lease_until = DATE_SUB(NOW(), INTERVAL 1 SECOND) WHERE id = ?", id);
     }
 
     private void logDbState(String phase) {
@@ -123,38 +131,41 @@ class ResilienceIntegrationTest extends AbstractIntegrationTest {
     // ── 시나리오 B: PROCESSING stuck 복구 전체 흐름 ─────────────────────────────
 
     // [시나리오] 서버 장애로 PROCESSING 상태에서 20분째 멈춤 → stuck 판정(threshold=10분)
-    //           → stuckRecoveryScheduler가 PENDING으로 복구 → retryScheduler가 재발송
+    //           → stuckRecoveryScheduler가 RETRYING(실패 1회)으로 복구 → retryScheduler가 재발송
     // → STUCK_RECOVERY NotificationLog 기록 + 최종 SENT 전이 검증
     @Test
-    @DisplayName("시나리오B - PROCESSING stuck 20분 → PENDING 복구 → 재발송 → SENT")
+    @DisplayName("시나리오B - PROCESSING stuck → RETRYING(1회) 복구 → 재발송 → SENT")
     void stuckRecovery_processingStuck20Min_recoveredAndSent() {
         Notification notification = saveNotification("stuck-001");
         Long id = notification.getId();
 
-        // PROCESSING 상태 + updated_at = 20분 전으로 DB 직접 설정 (서버 장애 상황 모사)
+        // PROCESSING lease 만료 상태를 DB 직접 설정 (서버 장애 상황 모사)
         // @PreUpdate 우회를 위해 JdbcTemplate 사용
         jdbcTemplate.update(
-                "UPDATE notification SET status = 'PROCESSING', updated_at = ? WHERE id = ?",
-                LocalDateTime.now().minusMinutes(20), id
-        );
+                "UPDATE notification SET status = 'PROCESSING', processing_token = ?, " +
+                        "claimed_at = DATE_SUB(NOW(), INTERVAL 20 MINUTE), " +
+                        "lease_until = DATE_SUB(NOW(), INTERVAL 10 MINUTE), " +
+                        "updated_at = DATE_SUB(NOW(), INTERVAL 20 MINUTE) WHERE id = ?",
+                UUID.randomUUID().toString(), id);
         log.info("[시나리오B] PROCESSING + 20분 전 updated_at 설정 id={}", id);
         logDbState("stuck 설정 후");
 
-        // stuckRecoveryScheduler 흐름 재현: threshold=10분 → 20분 전이면 대상
-        dispatchService.recoverStuck(10);
+        // stuckRecoveryScheduler 흐름 재현: lease가 만료됐으므로 복구 대상
+        dispatchService.recoverStuck();
 
         Notification recovered = notificationJpaRepository.findById(id).orElseThrow();
         log.info("[시나리오B] 복구 후 status={}, retryCount={}", recovered.getStatus(), recovered.getRetryCount());
-        assertThat(recovered.getStatus()).isEqualTo(NotificationStatus.PENDING);
-        assertThat(recovered.getRetryCount()).isEqualTo(0);
+        assertThat(recovered.getStatus()).isEqualTo(NotificationStatus.RETRYING);
+        assertThat(recovered.getRetryCount()).isEqualTo(1);
 
         // NotificationLog에 STUCK_RECOVERY reason 기록 확인
         boolean hasStuckLog = notificationLogJpaRepository.findAll().stream()
-                .anyMatch(l -> "STUCK_RECOVERY".equals(l.getReason()));
+                .anyMatch(l -> "PROCESSING_STUCK".equals(l.getReason()));
         assertThat(hasStuckLog).isTrue();
-        log.info("[시나리오B] STUCK_RECOVERY 로그 확인 ✓");
+        log.info("[시나리오B] PROCESSING_STUCK 로그 확인 ✓");
 
-        // 복구 후 retryScheduler 재실행 → 최종 SENT 전이
+        // 복구 후 backoff 경과를 시뮬레이션하고 retryScheduler 재실행 → 최종 SENT 전이
+        setNextRetryAtInPast(id);
         List<Long> pendingIds = dispatchService.fetchPendingIds(10);
         for (Long pendingId : pendingIds) {
             dispatchService.dispatch(pendingId);
@@ -164,7 +175,62 @@ class ResilienceIntegrationTest extends AbstractIntegrationTest {
 
         Notification sent = notificationJpaRepository.findById(id).orElseThrow();
         assertThat(sent.getStatus()).isEqualTo(NotificationStatus.SENT);
-        log.info("[시나리오B] 검증 완료 — stuck → PENDING 복구 → SENT ✓");
+        log.info("[시나리오B] 검증 완료 — stuck → RETRYING 복구 → SENT ✓");
+    }
+
+    // [시나리오] 워커 A가 claim한 뒤 멈춤 → lease 만료 후 복구 → 워커 B가 재claim
+    //           → A가 뒤늦게 성공 결과를 반영하려 해도 token A는 token B와 다르므로 0행이어야 함
+    @Test
+    @DisplayName("시나리오B-1 - lease 회수 후 옛 워커의 늦은 finish는 새 소유자 상태를 덮지 못한다")
+    void lateFinish_afterLeaseRecovery_cannotOverwriteNewOwner() {
+        Notification notification = saveNotification("lease-fencing-001");
+        Long id = notification.getId();
+
+        Notification workerA = dispatchStateService.claim(id).orElseThrow().snapshot();
+        String tokenA = workerA.getProcessingToken();
+        expireLease(id);
+
+        dispatchService.recoverStuck();
+        setNextRetryAtInPast(id);
+        Notification workerB = dispatchStateService.claim(id).orElseThrow().snapshot();
+        String tokenB = workerB.getProcessingToken();
+        assertThat(tokenB).isNotEqualTo(tokenA);
+
+        workerA.markSent();
+        dispatchStateService.finish(workerA, 1, null);
+
+        Notification afterLateFinish = notificationJpaRepository.findById(id).orElseThrow();
+        assertThat(afterLateFinish.getStatus()).isEqualTo(NotificationStatus.PROCESSING);
+        assertThat(afterLateFinish.getProcessingToken()).isEqualTo(tokenB);
+
+        workerB.markSent();
+        dispatchStateService.finish(workerB, 2, null);
+        assertThat(notificationJpaRepository.findById(id).orElseThrow().getStatus())
+                .isEqualTo(NotificationStatus.SENT);
+    }
+
+    // [시나리오] 매번 worker가 lease를 넘겨 멈추면 PENDING으로 무한 복귀하면 안 된다.
+    @Test
+    @DisplayName("시나리오B-2 - lease 만료가 3회 반복되면 FAILED(PROCESSING_STUCK)로 끝난다")
+    void repeatedLeaseExpiry_threeTimes_becomesFailed() {
+        Notification notification = saveNotification("lease-max-retry-001");
+        Long id = notification.getId();
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            dispatchStateService.claim(id).orElseThrow();
+            expireLease(id);
+            dispatchService.recoverStuck();
+
+            Notification recovered = notificationJpaRepository.findById(id).orElseThrow();
+            assertThat(recovered.getRetryCount()).isEqualTo(attempt);
+            if (attempt < 3) {
+                assertThat(recovered.getStatus()).isEqualTo(NotificationStatus.RETRYING);
+                setNextRetryAtInPast(id);
+            } else {
+                assertThat(recovered.getStatus()).isEqualTo(NotificationStatus.FAILED);
+                assertThat(recovered.getFailureReason()).isEqualTo("PROCESSING_STUCK");
+            }
+        }
     }
 
     // ── 시나리오 C: 외부 채널 일시 장애 → 재시도 → 성공 ───────────────────────
@@ -191,7 +257,7 @@ class ResilienceIntegrationTest extends AbstractIntegrationTest {
         // 1회 실패 후: RETRYING, retryCount=1, nextRetryAt = 1분 후 설정
         assertThat(afterFirst.getStatus()).isEqualTo(NotificationStatus.RETRYING);
         assertThat(afterFirst.getRetryCount()).isEqualTo(1);
-        assertThat(afterFirst.getNextRetryAt()).isAfter(LocalDateTime.now().minusSeconds(1));
+        assertThat(afterFirst.getNextRetryAt()).isAfter(LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1));
 
         // nextRetryAt 경과 시뮬레이션 (실제 1분 대기 대신 DB 직접 수정)
         setNextRetryAtInPast(id);
@@ -216,18 +282,18 @@ class ResilienceIntegrationTest extends AbstractIntegrationTest {
         log.info("[시나리오C] 검증 완료 — DispatchHistory 2건(FAILED+SENT), 최종 SENT ✓");
     }
 
-    // ── 시나리오 D: 외부 서버 타임아웃 → NonRetryable → 즉시 FAILED ───────────
+    // ── 시나리오 D: 외부 서버 타임아웃 → delivery unknown → 재시도 ───────────
 
     // [시나리오] 채널 타임아웃 → NonRetryableException → 재시도 없이 즉시 FAILED
     //           [정책 근거] 외부 서비스가 이미 처리했을 가능성 → 재시도 시 중복 발송 위험
     // → retryCount=0 유지, FAILED, DispatchHistory 1건(FAILED), 이후 스케줄러 대상 제외 검증
     @Test
-    @DisplayName("시나리오D - 채널 타임아웃 → NonRetryable → 재시도 없이 즉시 FAILED")
-    void channelTimeout_nonRetryable_immediatelyFailed() {
+    @DisplayName("시나리오D - 채널 타임아웃(Unknown) → RETRYING")
+    void channelTimeout_unknown_becomesRetrying() {
         Notification notification = saveNotification("timeout-001");
         Long id = notification.getId();
 
-        // NonRetryableException(타임아웃 모사) 설정
+        // delivery unknown 타임아웃 모사
         channelSender.setThrowTimeout(true);
 
         log.info("[시나리오D] dispatch 시작 id={}", id);
@@ -236,19 +302,19 @@ class ResilienceIntegrationTest extends AbstractIntegrationTest {
         logDbState("dispatch 후");
 
         Notification result = notificationJpaRepository.findById(id).orElseThrow();
-        // 재시도 없이 즉시 FAILED: retryCount 변화 없음
-        assertThat(result.getStatus()).isEqualTo(NotificationStatus.FAILED);
-        assertThat(result.getRetryCount()).isEqualTo(0);
-        assertThat(result.getNextRetryAt()).isNull();
+        // 결과가 불명인 timeout은 유실보다 중복을 감수하고 재시도한다.
+        assertThat(result.getStatus()).isEqualTo(NotificationStatus.RETRYING);
+        assertThat(result.getRetryCount()).isEqualTo(1);
+        assertThat(result.getNextRetryAt()).isNotNull();
 
         assertThat(dispatchHistoryJpaRepository.count()).isEqualTo(1L);
         DispatchHistory history = dispatchHistoryJpaRepository.findAll().get(0);
         assertThat(history.getStatus()).isEqualTo(DispatchStatus.FAILED);
 
-        // FAILED 상태는 fetchPendingIds 조건(PENDING, RETRYING)에 해당하지 않음
+        // RETRYING은 nextRetryAt 이전에는 재처리 대상이 아니다.
         List<Long> pendingIds = dispatchService.fetchPendingIds(10);
         assertThat(pendingIds).doesNotContain(id);
-        log.info("[시나리오D] 검증 완료 — 재시도 없이 즉시 FAILED, 스케줄러 재처리 대상 아님 ✓");
+        log.info("[시나리오D] 검증 완료 — timeout은 Unknown으로 기록되고 RETRYING ✓");
     }
 
     // ── 시나리오 E: MAX_RETRY 초과 → 최종 FAILED ──────────────────────────────

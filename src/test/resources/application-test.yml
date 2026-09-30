@@ -1,10 +1,15 @@
 spring:
   sql:
     init:
-      mode: never   # create-drop이 테이블 관리, schema.sql(shedlock·FK) 불필요
+      # ⚠️ never로 두면 shedlock 테이블이 안 생겨 @SchedulerLock이 매 주기 예외를 던지고
+      #    스케줄러가 한 번도 실행되지 않는다. 회수 경로가 통째로 미검증 상태가 된다.
+      mode: always
   jpa:
+    # 공유 Testcontainers DB에서 컨텍스트별 create-drop은 FK가 남은 notification을 먼저 drop해
+    # 종료 오류를 만들고 다음 컨텍스트의 DDL과 섞인다. update로 한 번 만든 뒤 각 테스트가 데이터를 정리한다.
+    defer-datasource-initialization: true
     hibernate:
-      ddl-auto: create-drop
+      ddl-auto: update
     properties:
       hibernate:
         dialect: org.hibernate.dialect.MySQLDialect

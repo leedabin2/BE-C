@@ -1,4 +1,5 @@
 package com.notification.infrastructure.adapter.out.channel;
+// PRD: F2-2 (Mock 발송, 제약 "실제 발송 불필요") → docs/prd/F2.md
 
 import com.notification.application.exception.ChannelFailureCode;
 import com.notification.application.exception.NonRetryableChannelException;

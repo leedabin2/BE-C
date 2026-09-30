@@ -1,4 +1,5 @@
 package com.notification.common.response;
+// PRD: F1 → docs/prd/F1.md
 
 import com.notification.common.exception.ErrorCode;
 import io.swagger.v3.oas.annotations.media.Schema;

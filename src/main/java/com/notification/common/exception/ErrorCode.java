@@ -1,4 +1,5 @@
 package com.notification.common.exception;
+// PRD: F1, O-4 (NOTIFICATION_NOT_RETRYABLE) → docs/prd/F1.md
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;

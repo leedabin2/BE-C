@@ -1,4 +1,5 @@
 package com.notification.domain;
+// PRD: F1-1 → docs/prd/F1.md
 
 public enum NotificationType {
     ENROLLMENT_COMPLETED,
